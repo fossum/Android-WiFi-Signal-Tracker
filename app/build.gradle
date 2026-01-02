@@ -1,7 +1,4 @@
-plugins {
-    id 'com.android.application'
-    id 'com.google.android.libraries.mapsplatform.secrets-gradle-plugin'
-}
+apply plugin: 'com.android.application'
 
 android {
     namespace 'com.example.wifisignaltracker'
@@ -13,6 +10,9 @@ android {
         targetSdk 34
         versionCode 1
         versionName "1.0"
+        
+        // Add your Google Maps API key here
+        manifestPlaceholders = [MAPS_API_KEY: "YOUR_GOOGLE_MAPS_API_KEY_HERE"]
     }
 
     buildTypes {
