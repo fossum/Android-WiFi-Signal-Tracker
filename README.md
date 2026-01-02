@@ -27,15 +27,12 @@ An Android application that tracks WiFi signal strength as you walk around and d
 1. Clone this repository
 2. Open the project in Android Studio
 3. Obtain a Google Maps API key from the [Google Cloud Console](https://console.cloud.google.com/)
-4. Add your API key to `app/build.gradle`:
-   ```gradle
-   defaultConfig {
-       ...
-       manifestPlaceholders = [MAPS_API_KEY: "YOUR_API_KEY_HERE"]
-   }
+   - Enable "Maps SDK for Android" API
+4. Add your API key to `local.properties` file in the root directory:
+   ```properties
+   MAPS_API_KEY=your_actual_api_key_here
    ```
-   Replace `YOUR_API_KEY_HERE` with your actual Google Maps API key
-5. Build and run the app on your Android device
+5. Build and run the app on your Android device or emulator
 
 ## Permissions
 
