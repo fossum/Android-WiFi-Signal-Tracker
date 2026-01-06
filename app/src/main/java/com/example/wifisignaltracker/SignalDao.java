@@ -20,6 +20,12 @@ public interface SignalDao {
     @Query("SELECT * FROM measurements ORDER BY timestamp DESC")
     List<SignalMeasurement> getAllMeasurements();
 
+    @Query("SELECT * FROM measurements WHERE ssid = :ssid")
+    List<SignalMeasurement> getMeasurementsBySsid(String ssid);
+
+    @Query("SELECT DISTINCT ssid FROM measurements")
+    List<String> getUniqueSsids();
+
     @Query("DELETE FROM measurements")
     void deleteAll();
 }

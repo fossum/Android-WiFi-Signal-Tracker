@@ -2,18 +2,15 @@ package com.example.wifisignaltracker;
 
 import android.Manifest;
 import android.annotation.SuppressLint;
-import android.content.BroadcastReceiver;
+import android.app.ActivityManager;
 import android.content.Context;
 import android.content.Intent;
-import android.content.IntentFilter;
 import android.content.pm.PackageManager;
-import android.location.Location;
-import android.net.wifi.ScanResult;
-import android.net.wifi.WifiManager;
+import android.graphics.Color;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.util.Log;
 import android.widget.Button;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -25,11 +22,7 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
 
 import com.google.android.gms.location.FusedLocationProviderClient;
-import com.google.android.gms.location.LocationCallback;
-import com.google.android.gms.location.LocationRequest;
-import com.google.android.gms.location.LocationResult;
 import com.google.android.gms.location.LocationServices;
-import com.google.android.gms.location.Priority;
 import com.google.android.gms.maps.CameraUpdateFactory;
 import com.google.android.gms.maps.GoogleMap;
 import com.google.android.gms.maps.OnMapReadyCallback;
@@ -38,8 +31,11 @@ import com.google.android.gms.maps.model.BitmapDescriptorFactory;
 import com.google.android.gms.maps.model.LatLng;
 import com.google.android.gms.maps.model.Marker;
 import com.google.android.gms.maps.model.MarkerOptions;
+import com.google.android.gms.maps.model.Polyline;
+import com.google.android.gms.maps.model.PolylineOptions;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -47,53 +43,36 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * MainActivity handles the UI, location tracking, and WiFi scanning logic.
- * Integrated with Room Database for persistent storage of signal data.
+ * MainActivity handles UI and visualizes WiFi signal data.
+ * Supports a "Suspected Location" view (default) and a "Detailed View" for individual SSIDs.
+ * Uses an improved Weighted Centroid algorithm to estimate broadcast location.
  */
-public class MainActivity extends AppCompatActivity implements OnMapReadyCallback {
-
-    private static final String TAG = "WiFiSignalTracker";
-    private static final int WIFI_SCAN_INTERVAL_MS = 5000;
-    private static final int MIN_SIGNAL_STRENGTH_DBM = -90;
+public class MainActivity extends AppCompatActivity implements OnMapReadyCallback, GoogleMap.OnMarkerClickListener {
 
     private GoogleMap mMap;
-    private WifiManager wifiManager;
     private FusedLocationProviderClient fusedLocationClient;
-    private LocationCallback locationCallback;
     
     private Button startButton;
     private TextView signalInfoText;
-    private TextView locationInfoText;
-    
-    private boolean isTracking = false;
-    private Location currentLocation;
-    
+
     // Database components
     private AppDatabase db;
     private ExecutorService databaseExecutor;
     
     private final List<Marker> markers = new ArrayList<>();
+    private final List<Polyline> polylines = new ArrayList<>();
     
-    private Handler wifiScanHandler;
-    private Runnable wifiScanRunnable;
-    private BroadcastReceiver wifiScanReceiver;
+    private String selectedSsid = null; // State: null = summary view, non-null = detailed view
 
-    // Modern way to request permissions using Activity Results API
+    private final Handler mapUpdateHandler = new Handler(Looper.getMainLooper());
+    private Runnable mapUpdateRunnable;
+
     private final ActivityResultLauncher<String[]> requestPermissionLauncher =
             registerForActivityResult(new ActivityResultContracts.RequestMultiplePermissions(), result -> {
-                Boolean fineLocationGranted = result.getOrDefault(Manifest.permission.ACCESS_FINE_LOCATION, false);
-                Boolean coarseLocationGranted = result.getOrDefault(Manifest.permission.ACCESS_COARSE_LOCATION, false);
-                
-                if (fineLocationGranted != null && fineLocationGranted) {
+                if (Boolean.TRUE.equals(result.getOrDefault(Manifest.permission.ACCESS_FINE_LOCATION, false))) {
                     // Precise location access granted.
                     enableMyLocationUI();
-                    loadExistingMarkers();
-                } else if (coarseLocationGranted != null && coarseLocationGranted) {
-                    // Only approximate location access granted.
-                    loadExistingMarkers();
-                } else {
-                    // No location access granted.
-                    Toast.makeText(this, "Location permission is required for WiFi scanning.", Toast.LENGTH_LONG).show();
+                    startMapUpdates();
                 }
             });
 
@@ -105,22 +84,15 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         // Initialize Database and Executor
         db = AppDatabase.getDatabase(this);
         databaseExecutor = Executors.newSingleThreadExecutor();
-
-        // Initialize system services
-        wifiManager = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
-        wifiScanHandler = new Handler(Looper.getMainLooper());
 
         // Bind UI components
         startButton = findViewById(R.id.start_button);
         signalInfoText = findViewById(R.id.signal_info_text);
-        locationInfoText = findViewById(R.id.location_info_text);
-
-        // Set up local variable for buttons only used in onCreate
         Button clearButton = findViewById(R.id.clear_button);
 
         // Initialize button actions
-        startButton.setOnClickListener(v -> toggleTracking());
+        startButton.setOnClickListener(v -> toggleService());
         clearButton.setOnClickListener(v -> clearAllData());
 
         // Initialize Map
@@ -130,227 +102,270 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             mapFragment.getMapAsync(this);
         }
 
-        // Handle WiFi scan results
-        wifiScanReceiver = new BroadcastReceiver() {
-            @Override
-            public void onReceive(Context context, Intent intent) {
-                if (isTracking && currentLocation != null) {
-                    processWifiScanResults();
-                }
-            }
-        };
-
-        // Handle location updates
-        locationCallback = new LocationCallback() {
-            @Override
-            public void onLocationResult(@NonNull LocationResult locationResult) {
-                currentLocation = locationResult.getLastLocation();
-                if (currentLocation != null) {
-                    updateLocationInfo();
-                }
-            }
-        };
-
-        // Periodic WiFi scan trigger
-        wifiScanRunnable = new Runnable() {
-            @SuppressWarnings("deprecation") // startScan() is deprecated but needed for active tracking
-            @Override
-            public void run() {
-                if (isTracking) {
-                    try {
-                        // Requesting a scan. Throttled by the system (4 scans / 2 mins in foreground).
-                        wifiManager.startScan();
-                    } catch (Exception e) {
-                        Log.e(TAG, "Failed to start WiFi scan", e);
-                    }
-                    wifiScanHandler.postDelayed(this, WIFI_SCAN_INTERVAL_MS);
-                }
-            }
-        };
-
+        updateButtonState();
         checkAndRequestPermissions();
+    }
+
+    private void toggleService() {
+        Intent serviceIntent = new Intent(this, TrackingService.class);
+        if (isServiceRunning(TrackingService.class)) {
+            stopService(serviceIntent);
+            Toast.makeText(this, "Tracking stopped", Toast.LENGTH_SHORT).show();
+        } else {
+            ContextCompat.startForegroundService(this, serviceIntent);
+            Toast.makeText(this, "Tracking started in background", Toast.LENGTH_SHORT).show();
+        }
+        updateButtonState();
+    }
+
+    private void updateButtonState() {
+        if (isServiceRunning(TrackingService.class)) {
+            startButton.setText(R.string.stop_tracking);
+        } else {
+            startButton.setText(R.string.start_tracking);
+        }
+    }
+
+    private boolean isServiceRunning(Class<?> serviceClass) {
+        ActivityManager manager = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
+        for (ActivityManager.RunningServiceInfo service : manager.getRunningServices(Integer.MAX_VALUE)) {
+            if (serviceClass.getName().equals(service.service.getClassName())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Override
     public void onMapReady(@NonNull GoogleMap googleMap) {
         mMap = googleMap;
+        mMap.setOnMarkerClickListener(this);
+        
+        // Reset to non-detailed view when clicking on blank part of map
+        mMap.setOnMapClickListener(latLng -> {
+            if (selectedSsid != null) {
+                selectedSsid = null;
+                refreshMarkersFromDatabase();
+            }
+        });
+        
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
                 == PackageManager.PERMISSION_GRANTED) {
             enableMyLocationUI();
-            loadExistingMarkers();
+            startMapUpdates();
         }
     }
 
-    /**
-     * Loads measurements from the database and displays them on the map.
-     */
-    private void loadExistingMarkers() {
+    private void startMapUpdates() {
+        mapUpdateRunnable = new Runnable() {
+            @Override
+            public void run() {
+                if (selectedSsid == null) {
+                    refreshMarkersFromDatabase();
+                }
+                mapUpdateHandler.postDelayed(this, 5000);
+            }
+        };
+        mapUpdateHandler.post(mapUpdateRunnable);
+    }
+
+    private void refreshMarkersFromDatabase() {
         databaseExecutor.execute(() -> {
-            List<SignalMeasurement> measurements = db.signalDao().getAllMeasurements();
+            List<SignalMeasurement> allMeasurements = db.signalDao().getAllMeasurements();
             runOnUiThread(() -> {
-                for (SignalMeasurement m : measurements) {
-                    addMarkerToMap(m);
+                clearMapVisuals();
+                
+                if (selectedSsid == null) {
+                    showSummaryView(allMeasurements);
+                } else {
+                    showDetailedView(allMeasurements);
                 }
             });
         });
+    }
+
+    private void showSummaryView(List<SignalMeasurement> allMeasurements) {
+        Map<String, List<SignalMeasurement>> grouped = groupBySsid(allMeasurements);
+        
+        for (Map.Entry<String, List<SignalMeasurement>> entry : grouped.entrySet()) {
+            String ssid = entry.getKey();
+            LatLng suspectedLoc = calculateWeightedCentroid(entry.getValue());
+            
+            Marker marker = mMap.addMarker(new MarkerOptions()
+                    .position(suspectedLoc)
+                    .title("Suspected: " + ssid)
+                    .snippet(ssid)
+                    .icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_AZURE)));
+            if (marker != null) markers.add(marker);
+        }
+        
+        signalInfoText.setText(String.format(Locale.getDefault(), "Viewing %d unique networks", grouped.size()));
+    }
+
+    private void showDetailedView(List<SignalMeasurement> allMeasurements) {
+        List<SignalMeasurement> relevant = new ArrayList<>();
+        for (SignalMeasurement m : allMeasurements) {
+            if (m.getSsid().equals(selectedSsid)) relevant.add(m);
+        }
+
+        if (relevant.isEmpty()) {
+            selectedSsid = null;
+            showSummaryView(allMeasurements);
+            return;
+        }
+
+        LatLng suspectedLoc = calculateWeightedCentroid(relevant);
+
+        // Add supporting measurement markers
+        for (SignalMeasurement m : relevant) {
+            Marker marker = mMap.addMarker(new MarkerOptions()
+                    .position(new LatLng(m.getLatitude(), m.getLongitude()))
+                    .title(m.getSignalStrength() + " dBm")
+                    .snippet(m.getSsid())
+                    .icon(BitmapDescriptorFactory.defaultMarker(m.getHue())));
+            if (marker != null) markers.add(marker);
+            
+            // Draw connection line
+            Polyline polyline = mMap.addPolyline(new PolylineOptions()
+                    .add(suspectedLoc, new LatLng(m.getLatitude(), m.getLongitude()))
+                    .width(5).color(Color.BLUE));
+            if (polyline != null) {
+                polyline.setClickable(false);
+                polylines.add(polyline);
+            }
+        }
+
+        // Add suspected location marker
+        Marker mainMarker = mMap.addMarker(new MarkerOptions()
+                .position(suspectedLoc)
+                .title("Suspected: " + selectedSsid)
+                .snippet(selectedSsid)
+                .icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_AZURE)));
+        if (mainMarker != null) {
+            markers.add(mainMarker);
+            mainMarker.showInfoWindow();
+        }
+
+        signalInfoText.setText(String.format(Locale.getDefault(), "Detail: %s (%d points)", selectedSsid, relevant.size()));
+    }
+
+    private Map<String, List<SignalMeasurement>> groupBySsid(List<SignalMeasurement> measurements) {
+        Map<String, List<SignalMeasurement>> map = new HashMap<>();
+        for (SignalMeasurement m : measurements) {
+            if (!map.containsKey(m.getSsid())) map.put(m.getSsid(), new ArrayList<>());
+            map.get(m.getSsid()).add(m);
+        }
+        return map;
+    }
+
+    @Override
+    public boolean onMarkerClick(@NonNull Marker marker) {
+        String ssid = marker.getSnippet();
+        if (ssid != null) {
+            if (ssid.equals(selectedSsid)) {
+                return false;
+            }
+            selectedSsid = ssid;
+            refreshMarkersFromDatabase();
+            mMap.animateCamera(CameraUpdateFactory.newLatLng(marker.getPosition()));
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Improved Weighted Centroid algorithm.
+     * To prevent a large number of weak signals from overwhelming a few strong ones, 
+     * we use a higher power for weighting and only consider measurements within 
+     * a reasonable range of the strongest detected signal.
+     */
+    private LatLng calculateWeightedCentroid(List<SignalMeasurement> measurements) {
+        if (measurements == null || measurements.isEmpty()) return new LatLng(0,0);
+
+        // 1. Find the strongest signal in the set
+        int maxRssi = -127;
+        for (SignalMeasurement m : measurements) {
+            if (m.getSignalStrength() > maxRssi) maxRssi = m.getSignalStrength();
+        }
+
+        double totalWeight = 0;
+        double weightedLat = 0;
+        double weightedLng = 0;
+
+        for (SignalMeasurement m : measurements) {
+            // 2. Ignore signals that are significantly weaker than our best signal (e.g., >25dB difference)
+            // This prevents "background noise" from distant measurements from pulling the center away.
+            if (m.getSignalStrength() < (maxRssi - 25)) continue;
+
+            // 3. Use an exponential weight (Power of 6) to heavily favor strong signals.
+            // A -30dBm signal will have vastly more influence than a -60dBm signal.
+            double weight = Math.pow(Math.max(1, 110 + m.getSignalStrength()), 6);
+            
+            weightedLat += m.getLatitude() * weight;
+            weightedLng += m.getLongitude() * weight;
+            totalWeight += weight;
+        }
+
+        // Fallback if all were filtered
+        if (totalWeight == 0) return new LatLng(measurements.get(0).getLatitude(), measurements.get(0).getLongitude());
+
+        return new LatLng(weightedLat / totalWeight, weightedLng / totalWeight);
+    }
+
+    private void clearMapVisuals() {
+        for (Marker m : markers) m.remove();
+        markers.clear();
+        for (Polyline p : polylines) p.remove();
+        polylines.clear();
     }
 
     @SuppressLint("MissingPermission")
     private void enableMyLocationUI() {
-        if (mMap != null) {
-            mMap.setMyLocationEnabled(true);
-            fusedLocationClient.getLastLocation().addOnSuccessListener(this, location -> {
-                if (location != null) {
-                    LatLng currentLatLng = new LatLng(location.getLatitude(), location.getLongitude());
-                    mMap.moveCamera(CameraUpdateFactory.newLatLngZoom(currentLatLng, 17));
-                }
-            });
-        }
+        if (mMap == null) return;
+        mMap.setMyLocationEnabled(true);
+        fusedLocationClient.getLastLocation().addOnSuccessListener(this, location -> {
+            if (location != null && selectedSsid == null) {
+                mMap.moveCamera(CameraUpdateFactory.newLatLngZoom(
+                        new LatLng(location.getLatitude(), location.getLongitude()), 17));
+            }
+        });
     }
 
     private void checkAndRequestPermissions() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
-                != PackageManager.PERMISSION_GRANTED) {
-            // Launch the modern permission request dialog
-            requestPermissionLauncher.launch(new String[]{
-                    Manifest.permission.ACCESS_FINE_LOCATION,
-                    Manifest.permission.ACCESS_COARSE_LOCATION
-            });
+        List<String> permissions = new ArrayList<>();
+        permissions.add(Manifest.permission.ACCESS_FINE_LOCATION);
+        permissions.add(Manifest.permission.ACCESS_COARSE_LOCATION);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            permissions.add(Manifest.permission.POST_NOTIFICATIONS);
         }
-    }
-
-    private void toggleTracking() {
-        if (isTracking) stopTracking(); else startTracking();
-    }
-
-    private void startTracking() {
-        if (!wifiManager.isWifiEnabled()) {
-            Toast.makeText(this, "Please enable WiFi", Toast.LENGTH_SHORT).show();
-            return;
-        }
-
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
-                != PackageManager.PERMISSION_GRANTED) {
-            checkAndRequestPermissions();
-            return;
-        }
-
-        isTracking = true;
-        startButton.setText(R.string.stop_tracking);
-
-        LocationRequest locationRequest = new LocationRequest.Builder(
-                Priority.PRIORITY_HIGH_ACCURACY, 5000)
-                .setMinUpdateIntervalMillis(2000)
-                .build();
-
-        fusedLocationClient.requestLocationUpdates(locationRequest, locationCallback, 
-                Looper.getMainLooper());
-
-        // Modern way to register receiver with export flags (Required for Android 14+)
-        ContextCompat.registerReceiver(
-                this,
-                wifiScanReceiver,
-                new IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION),
-                ContextCompat.RECEIVER_NOT_EXPORTED
-        );
-        
-        wifiScanHandler.post(wifiScanRunnable);
-
-        Toast.makeText(this, "Recording to database...", Toast.LENGTH_SHORT).show();
-    }
-
-    private void stopTracking() {
-        isTracking = false;
-        startButton.setText(R.string.start_tracking);
-        fusedLocationClient.removeLocationUpdates(locationCallback);
-        try {
-            unregisterReceiver(wifiScanReceiver);
-        } catch (Exception ignored) {}
-        wifiScanHandler.removeCallbacks(wifiScanRunnable);
-    }
-
-    /**
-     * Processes WiFi scan results and saves them to the Room database.
-     */
-    @SuppressLint("MissingPermission")
-    private void processWifiScanResults() {
-        List<ScanResult> results = wifiManager.getScanResults();
-        List<SignalMeasurement> newMeasurements = new ArrayList<>();
-        
-        int strongestRssi = -127;
-        String strongestSsid = "None";
-
-        for (ScanResult result : results) {
-            if (result.SSID == null || result.SSID.isEmpty() || result.level < MIN_SIGNAL_STRENGTH_DBM) {
-                continue;
-            }
-
-            SignalMeasurement m = new SignalMeasurement(
-                    currentLocation.getLatitude(),
-                    currentLocation.getLongitude(),
-                    result.level,
-                    result.SSID
-            );
-            newMeasurements.add(m);
-
-            if (result.level > strongestRssi) {
-                strongestRssi = result.level;
-                strongestSsid = result.SSID;
-            }
-        }
-
-        if (!newMeasurements.isEmpty()) {
-            databaseExecutor.execute(() -> {
-                db.signalDao().insertAll(newMeasurements);
-                runOnUiThread(() -> {
-                    for (SignalMeasurement m : newMeasurements) {
-                        addMarkerToMap(m);
-                    }
-                });
-            });
-        }
-
-        updateSignalInfo(strongestRssi, strongestSsid, results.size());
-    }
-
-    private void updateSignalInfo(int rssi, String ssid, int totalFound) {
-        String info = String.format(Locale.getDefault(), 
-                "Strongest: %d dBm (%s)\nSaved %d networks", rssi, ssid, totalFound);
-        signalInfoText.setText(info);
-    }
-
-    private void updateLocationInfo() {
-        if (currentLocation != null) {
-            locationInfoText.setText(String.format(Locale.getDefault(), 
-                    "Location: %.6f, %.6f", currentLocation.getLatitude(), currentLocation.getLongitude()));
-        }
-    }
-
-    private void addMarkerToMap(SignalMeasurement m) {
-        if (mMap == null) return;
-        Marker marker = mMap.addMarker(new MarkerOptions()
-                .position(new LatLng(m.getLatitude(), m.getLongitude()))
-                .title(m.getSsid() + ": " + m.getSignalStrength() + "dBm")
-                .icon(BitmapDescriptorFactory.defaultMarker(m.getHue())));
-        if (marker != null) markers.add(marker);
+        requestPermissionLauncher.launch(permissions.toArray(new String[0]));
     }
 
     private void clearAllData() {
-        if (mMap != null) mMap.clear();
-        markers.clear();
-        
+        selectedSsid = null;
+        clearMapVisuals();
         databaseExecutor.execute(() -> {
             db.signalDao().deleteAll();
-            runOnUiThread(() -> Toast.makeText(MainActivity.this, "Database cleared", Toast.LENGTH_SHORT).show());
+            runOnUiThread(() -> Toast.makeText(this, "Database cleared", Toast.LENGTH_SHORT).show());
         });
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        updateButtonState();
+        if (mMap != null) startMapUpdates();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        mapUpdateHandler.removeCallbacks(mapUpdateRunnable);
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        stopTracking();
-        if (databaseExecutor != null) {
-            databaseExecutor.shutdown();
-        }
+        if (databaseExecutor != null) databaseExecutor.shutdown();
     }
 }
