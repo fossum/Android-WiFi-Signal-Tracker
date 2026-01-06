@@ -2,17 +2,15 @@ apply plugin: 'com.android.application'
 
 android {
     namespace 'com.example.wifisignaltracker'
-    compileSdk 34
+    compileSdk 35
 
     defaultConfig {
         applicationId "com.example.wifisignaltracker"
         minSdk 24
-        targetSdk 34
+        targetSdk 35
         versionCode 1
         versionName "1.0"
         
-        // Get Google Maps API key from local.properties or use placeholder
-        // Create local.properties file with: MAPS_API_KEY=your_actual_key_here
         def localProperties = new Properties()
         def localPropertiesFile = rootProject.file('local.properties')
         if (localPropertiesFile.exists()) {
@@ -20,6 +18,13 @@ android {
         }
         def mapsApiKey = localProperties.getProperty('MAPS_API_KEY', 'YOUR_GOOGLE_MAPS_API_KEY_HERE')
         manifestPlaceholders = [MAPS_API_KEY: mapsApiKey]
+
+        // Room schema export location
+        javaCompileOptions {
+            annotationProcessorOptions {
+                arguments += ["room.schemaLocation": "$projectDir/schemas".toString()]
+            }
+        }
     }
 
     buildTypes {

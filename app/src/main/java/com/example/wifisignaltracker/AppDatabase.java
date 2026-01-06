@@ -8,8 +8,9 @@ import androidx.room.RoomDatabase;
 /**
  * The Room database for the application.
  * Defines the entities and provides access to the DAOs.
+ * exportSchema is set to true to allow exporting the database schema.
  */
-@Database(entities = {SignalMeasurement.class}, version = 1)
+@Database(entities = {SignalMeasurement.class}, version = 1, exportSchema = true)
 public abstract class AppDatabase extends RoomDatabase {
     public abstract SignalDao signalDao();
 

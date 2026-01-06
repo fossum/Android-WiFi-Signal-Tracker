@@ -18,9 +18,10 @@ import android.widget.Button;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
-import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
 import com.google.android.gms.location.FusedLocationProviderClient;
@@ -41,18 +42,17 @@ import com.google.android.gms.maps.model.MarkerOptions;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
  * MainActivity handles the UI, location tracking, and WiFi scanning logic.
- * It coordinates between the Google Map, the FusedLocationProvider, and the WifiManager.
- * Now integrated with Room Database for persistent storage.
+ * Integrated with Room Database for persistent storage of signal data.
  */
 public class MainActivity extends AppCompatActivity implements OnMapReadyCallback {
 
     private static final String TAG = "WiFiSignalTracker";
-    private static final int LOCATION_PERMISSION_REQUEST_CODE = 1;
     private static final int WIFI_SCAN_INTERVAL_MS = 5000;
     private static final int MIN_SIGNAL_STRENGTH_DBM = -90;
 
@@ -62,7 +62,6 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     private LocationCallback locationCallback;
     
     private Button startButton;
-    private Button clearButton;
     private TextView signalInfoText;
     private TextView locationInfoText;
     
@@ -79,12 +78,31 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     private Runnable wifiScanRunnable;
     private BroadcastReceiver wifiScanReceiver;
 
+    // Modern way to request permissions using Activity Results API
+    private final ActivityResultLauncher<String[]> requestPermissionLauncher =
+            registerForActivityResult(new ActivityResultContracts.RequestMultiplePermissions(), result -> {
+                Boolean fineLocationGranted = result.getOrDefault(Manifest.permission.ACCESS_FINE_LOCATION, false);
+                Boolean coarseLocationGranted = result.getOrDefault(Manifest.permission.ACCESS_COARSE_LOCATION, false);
+                
+                if (fineLocationGranted != null && fineLocationGranted) {
+                    // Precise location access granted.
+                    enableMyLocationUI();
+                    loadExistingMarkers();
+                } else if (coarseLocationGranted != null && coarseLocationGranted) {
+                    // Only approximate location access granted.
+                    loadExistingMarkers();
+                } else {
+                    // No location access granted.
+                    Toast.makeText(this, "Location permission is required for WiFi scanning.", Toast.LENGTH_LONG).show();
+                }
+            });
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        // Initialize Database and Executor for background operations
+        // Initialize Database and Executor
         db = AppDatabase.getDatabase(this);
         databaseExecutor = Executors.newSingleThreadExecutor();
 
@@ -95,9 +113,11 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
 
         // Bind UI components
         startButton = findViewById(R.id.start_button);
-        clearButton = findViewById(R.id.clear_button);
         signalInfoText = findViewById(R.id.signal_info_text);
         locationInfoText = findViewById(R.id.location_info_text);
+
+        // Set up local variable for buttons only used in onCreate
+        Button clearButton = findViewById(R.id.clear_button);
 
         // Initialize button actions
         startButton.setOnClickListener(v -> toggleTracking());
@@ -133,10 +153,12 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
 
         // Periodic WiFi scan trigger
         wifiScanRunnable = new Runnable() {
+            @SuppressWarnings("deprecation") // startScan() is deprecated but needed for active tracking
             @Override
             public void run() {
                 if (isTracking) {
                     try {
+                        // Requesting a scan. Throttled by the system (4 scans / 2 mins in foreground).
                         wifiManager.startScan();
                     } catch (Exception e) {
                         Log.e(TAG, "Failed to start WiFi scan", e);
@@ -146,7 +168,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             }
         };
 
-        checkPermissions();
+        checkAndRequestPermissions();
     }
 
     @Override
@@ -186,25 +208,14 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         }
     }
 
-    private void checkPermissions() {
+    private void checkAndRequestPermissions() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
                 != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this,
-                    new String[]{Manifest.permission.ACCESS_FINE_LOCATION,
-                            Manifest.permission.ACCESS_COARSE_LOCATION},
-                    LOCATION_PERMISSION_REQUEST_CODE);
-        }
-    }
-
-    @Override
-    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions,
-                                           @NonNull int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode == LOCATION_PERMISSION_REQUEST_CODE) {
-            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                enableMyLocationUI();
-                loadExistingMarkers();
-            }
+            // Launch the modern permission request dialog
+            requestPermissionLauncher.launch(new String[]{
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+            });
         }
     }
 
@@ -220,7 +231,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
                 != PackageManager.PERMISSION_GRANTED) {
-            checkPermissions();
+            checkAndRequestPermissions();
             return;
         }
 
@@ -235,7 +246,14 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         fusedLocationClient.requestLocationUpdates(locationRequest, locationCallback, 
                 Looper.getMainLooper());
 
-        registerReceiver(wifiScanReceiver, new IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION));
+        // Modern way to register receiver with export flags (Required for Android 14+)
+        ContextCompat.registerReceiver(
+                this,
+                wifiScanReceiver,
+                new IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION),
+                ContextCompat.RECEIVER_NOT_EXPORTED
+        );
+        
         wifiScanHandler.post(wifiScanRunnable);
 
         Toast.makeText(this, "Recording to database...", Toast.LENGTH_SHORT).show();
@@ -281,11 +299,9 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             }
         }
 
-        // Save to database on a background thread
         if (!newMeasurements.isEmpty()) {
             databaseExecutor.execute(() -> {
                 db.signalDao().insertAll(newMeasurements);
-                // Update UI on main thread
                 runOnUiThread(() -> {
                     for (SignalMeasurement m : newMeasurements) {
                         addMarkerToMap(m);
@@ -323,7 +339,6 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         if (mMap != null) mMap.clear();
         markers.clear();
         
-        // Clear from database
         databaseExecutor.execute(() -> {
             db.signalDao().deleteAll();
             runOnUiThread(() -> Toast.makeText(MainActivity.this, "Database cleared", Toast.LENGTH_SHORT).show());

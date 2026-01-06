@@ -1,6 +1,7 @@
 package com.example.wifisignaltracker;
 
 import androidx.room.Entity;
+import androidx.room.Ignore;
 import androidx.room.PrimaryKey;
 
 /**
@@ -19,10 +20,17 @@ public class SignalMeasurement {
     private long timestamp;
     private String ssid;
 
-    // Default constructor for Room
+    /**
+     * Default constructor for Room.
+     */
     public SignalMeasurement() {
     }
 
+    /**
+     * Convenience constructor for creating new measurements in code.
+     * Annotated with @Ignore so Room doesn't get confused about which constructor to use.
+     */
+    @Ignore
     public SignalMeasurement(double latitude, double longitude, int signalStrength, String ssid) {
         this.latitude = latitude;
         this.longitude = longitude;
@@ -31,7 +39,7 @@ public class SignalMeasurement {
         this.timestamp = System.currentTimeMillis();
     }
 
-    // Getters and Setters
+    // Getters and Setters required by Room
     public int getId() { return id; }
     public void setId(int id) { this.id = id; }
     
