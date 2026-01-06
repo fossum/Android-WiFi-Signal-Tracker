@@ -1,7 +1,6 @@
 package com.example.wifisignaltracker;
 
 import android.Manifest;
-import android.annotation.SuppressLint;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -137,8 +136,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         // Enable my location if permission granted
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
                 == PackageManager.PERMISSION_GRANTED) {
-            @SuppressLint("MissingPermission")
-            boolean unused = mMap.setMyLocationEnabled(true);
+            mMap.setMyLocationEnabled(true);
             
             // Move camera to current location
             fusedLocationClient.getLastLocation().addOnSuccessListener(location -> {
@@ -169,8 +167,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
                 if (mMap != null) {
                     if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) 
                             == PackageManager.PERMISSION_GRANTED) {
-                        @SuppressLint("MissingPermission")
-                        boolean unused = mMap.setMyLocationEnabled(true);
+                        mMap.setMyLocationEnabled(true);
                     }
                 }
             } else {
