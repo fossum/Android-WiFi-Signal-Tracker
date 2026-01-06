@@ -1,14 +1,27 @@
 package com.example.wifisignaltracker;
 
+import androidx.room.Entity;
+import androidx.room.PrimaryKey;
+
 /**
- * Data class to store WiFi signal measurement with location
+ * Data class representing a WiFi signal measurement at a specific location.
+ * Annotated as a Room Entity for SQLite persistence.
  */
+@Entity(tableName = "measurements")
 public class SignalMeasurement {
-    private final double latitude;
-    private final double longitude;
-    private final int signalStrength; // in dBm
-    private final long timestamp;
-    private final String ssid;
+    
+    @PrimaryKey(autoGenerate = true)
+    private int id;
+    
+    private double latitude;
+    private double longitude;
+    private int signalStrength; // in dBm
+    private long timestamp;
+    private String ssid;
+
+    // Default constructor for Room
+    public SignalMeasurement() {
+    }
 
     public SignalMeasurement(double latitude, double longitude, int signalStrength, String ssid) {
         this.latitude = latitude;
@@ -18,42 +31,32 @@ public class SignalMeasurement {
         this.timestamp = System.currentTimeMillis();
     }
 
-    public double getLatitude() {
-        return latitude;
-    }
-
-    public double getLongitude() {
-        return longitude;
-    }
-
-    public int getSignalStrength() {
-        return signalStrength;
-    }
-
-    public String getSsid() {
-        return ssid;
-    }
-
-    public long getTimestamp() {
-        return timestamp;
-    }
+    // Getters and Setters
+    public int getId() { return id; }
+    public void setId(int id) { this.id = id; }
+    
+    public double getLatitude() { return latitude; }
+    public void setLatitude(double latitude) { this.latitude = latitude; }
+    
+    public double getLongitude() { return longitude; }
+    public void setLongitude(double longitude) { this.longitude = longitude; }
+    
+    public int getSignalStrength() { return signalStrength; }
+    public void setSignalStrength(int signalStrength) { this.signalStrength = signalStrength; }
+    
+    public String getSsid() { return ssid; }
+    public void setSsid(String ssid) { this.ssid = ssid; }
+    
+    public long getTimestamp() { return timestamp; }
+    public void setTimestamp(long timestamp) { this.timestamp = timestamp; }
 
     /**
-     * Get color based on signal strength
-     * Excellent: > -50 dBm
-     * Good: -50 to -60 dBm
-     * Fair: -60 to -70 dBm
-     * Poor: < -70 dBm
+     * Map signal strength to a hue for Google Maps markers.
      */
     public float getHue() {
-        if (signalStrength >= -50) {
-            return 120f; // Green (Excellent)
-        } else if (signalStrength >= -60) {
-            return 60f; // Yellow (Good)
-        } else if (signalStrength >= -70) {
-            return 30f; // Orange (Fair)
-        } else {
-            return 0f; // Red (Poor)
-        }
+        if (signalStrength >= -50) return 120f;      // Green (Excellent)
+        else if (signalStrength >= -60) return 60f; // Yellow (Good)
+        else if (signalStrength >= -70) return 30f; // Orange (Fair)
+        else return 0f;                             // Red (Poor)
     }
 }
