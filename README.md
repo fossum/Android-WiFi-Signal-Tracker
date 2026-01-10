@@ -74,6 +74,19 @@ Build the app using Gradle:
 ./gradlew assembleDebug
 ```
 
+## CI/CD and Secrets
+
+This project uses GitHub Actions for Continuous Integration.
+
+### Secrets Configuration
+To run the CI pipeline successfully, you must configure the following **GitHub Actions Secrets** in your repository settings:
+
+*   `MAPS_API_KEY`: Your Google Maps API key (required for building the app).
+
+### Workflows
+*   **Pull Requests**: Runs Unit Tests, Lint, and builds a Debug APK.
+*   **Main Branch**: Runs Unit Tests, Lint, and builds a Release APK (signed with debug keystore for installability).
+
 ## License
 
 This project is open source and available for educational purposes.

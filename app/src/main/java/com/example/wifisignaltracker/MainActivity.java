@@ -274,7 +274,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
      * we use a higher power for weighting and only consider measurements within 
      * a reasonable range of the strongest detected signal.
      */
-    private LatLng calculateWeightedCentroid(List<SignalMeasurement> measurements) {
+    public LatLng calculateWeightedCentroid(List<SignalMeasurement> measurements) {
         if (measurements == null || measurements.isEmpty()) return new LatLng(0,0);
 
         // 1. Find the strongest signal in the set
