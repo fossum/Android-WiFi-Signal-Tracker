@@ -1,0 +1,59 @@
+apply plugin: 'com.android.application'
+
+android {
+    namespace 'com.example.wifisignaltracker'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "com.example.wifisignaltracker"
+        minSdk 24
+        targetSdk 35
+        versionCode 1
+        versionName "1.0"
+
+        def localProperties = new Properties()
+        def localPropertiesFile = rootProject.file('local.properties')
+        if (localPropertiesFile.exists()) {
+            localPropertiesFile.withInputStream { localProperties.load(it) }
+        }
+        def mapsApiKey = localProperties.getProperty('MAPS_API_KEY')
+        if (mapsApiKey == null || mapsApiKey.trim().isEmpty() || mapsApiKey == 'YOUR_GOOGLE_MAPS_API_KEY_HERE') {
+            throw new GradleException("MAPS_API_KEY is not set in local.properties. Please add MAPS_API_KEY=<your Google Maps API key> to local.properties.")
+        }
+        manifestPlaceholders = [MAPS_API_KEY: mapsApiKey]
+
+        // Room schema export location
+        javaCompileOptions {
+            annotationProcessorOptions {
+                arguments += ["room.schemaLocation": "$projectDir/schemas".toString()]
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'com.google.android.material:material:1.9.0'
+    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+    implementation 'com.google.android.gms:play-services-maps:18.1.0'
+    implementation 'com.google.android.gms:play-services-location:21.0.1'
+
+    // Room Database
+    def room_version = "2.6.1"
+    implementation "androidx.room:room-runtime:$room_version"
+    annotationProcessor "androidx.room:room-compiler:$room_version"
+
+    testImplementation 'junit:junit:4.13.2'
+}
