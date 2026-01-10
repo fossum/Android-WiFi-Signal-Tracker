@@ -1,0 +1,16 @@
+#!/bin/sh
+
+APP_HOME=$( cd "$( dirname "$0" )" && pwd )
+APP_NAME="Gradle"
+
+# Determine the Java command to use to start the JVM.
+if [ -n "$JAVA_HOME" ] ; then
+    JAVACMD=$JAVA_HOME/bin/java
+else
+    JAVACMD=java
+fi
+
+# Collect all arguments for the java command
+CLASSPATH=$APP_HOME/gradle/wrapper/gradle-wrapper.jar
+
+exec "$JAVACMD" -classpath "$CLASSPATH" org.gradle.wrapper.GradleWrapperMain "$@"
