@@ -29,7 +29,6 @@ import com.google.android.gms.maps.OnMapReadyCallback;
 import com.google.android.gms.maps.SupportMapFragment;
 import com.google.android.gms.maps.model.BitmapDescriptorFactory;
 import com.google.android.gms.maps.model.LatLng;
-import com.google.android.gms.maps.model.LatLngBounds;
 import com.google.android.gms.maps.model.Marker;
 import com.google.android.gms.maps.model.MarkerOptions;
 import com.google.android.gms.maps.model.Polyline;
@@ -49,7 +48,6 @@ import java.util.concurrent.Executors;
  * MainActivity handles UI and visualizes WiFi signal data.
  * Supports a "Suspected Location" view (default) and a "Detailed View" for individual SSIDs.
  * Uses an improved Weighted Centroid algorithm to estimate broadcast location.
- * Implements Marker Clustering and visible region filtering for performance.
  */
 public class MainActivity extends AppCompatActivity implements OnMapReadyCallback, GoogleMap.OnCameraIdleListener, ClusterManager.OnClusterItemClickListener<WifiClusterItem> {
 
@@ -322,6 +320,9 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
 
     /**
      * Improved Weighted Centroid algorithm.
+     * To prevent a large number of weak signals from overwhelming a few strong ones,
+     * we use a higher power for weighting and only consider measurements within
+     * a reasonable range of the strongest detected signal.
      */
     private LatLng calculateWeightedCentroid(List<SignalMeasurement> measurements) {
         if (measurements == null || measurements.isEmpty()) return new LatLng(0,0);
@@ -338,9 +339,11 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
 
         for (SignalMeasurement m : measurements) {
             // 2. Ignore signals that are significantly weaker than our best signal
+            // This prevents "background noise" from distant measurements from pulling the center away.
             if (m.getSignalStrength() < (maxRssi - SIGNAL_FILTER_THRESHOLD_DB)) continue;
 
             // 3. Use an exponential weight to heavily favor strong signals.
+            // A -30dBm signal will have vastly more influence than a -60dBm signal.
             double weight = Math.pow(Math.max(1, WEIGHT_OFFSET + m.getSignalStrength()), WEIGHT_EXPONENT);
 
             weightedLat += m.getLatitude() * weight;
@@ -378,8 +381,10 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         permissions.add(Manifest.permission.POST_NOTIFICATIONS);
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // On Android 13+ request location + notification permissions
             requestPermissionLauncher.launch(permissions.toArray(new String[0]));
         } else {
+            // On older versions, POST_NOTIFICATIONS is not a runtime permission
             requestPermissionLauncher.launch(new String[] {
                     Manifest.permission.ACCESS_FINE_LOCATION,
                     Manifest.permission.ACCESS_COARSE_LOCATION
