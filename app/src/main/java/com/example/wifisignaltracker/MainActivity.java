@@ -53,6 +53,11 @@ import java.util.concurrent.Executors;
  */
 public class MainActivity extends AppCompatActivity implements OnMapReadyCallback, GoogleMap.OnCameraIdleListener, ClusterManager.OnClusterItemClickListener<WifiClusterItem> {
 
+    // Weighted centroid algorithm constants
+    private static final int SIGNAL_FILTER_THRESHOLD_DB = 25; // Filter signals weaker than max by this amount
+    private static final double WEIGHT_OFFSET = 110.0; // Offset to ensure positive weights (min RSSI ~-110 dBm)
+    private static final double WEIGHT_EXPONENT = 6.0; // Exponential weight to heavily favor strong signals
+
     private GoogleMap mMap;
     private FusedLocationProviderClient fusedLocationClient;
     private ClusterManager<WifiClusterItem> clusterManager;
@@ -117,7 +122,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
 
     private void toggleService() {
         Intent serviceIntent = new Intent(this, TrackingService.class);
-        if (isServiceRunning(TrackingService.class)) {
+        if (TrackingService.isRunning()) {
             stopService(serviceIntent);
             Toast.makeText(this, "Tracking stopped", Toast.LENGTH_SHORT).show();
         } else {
@@ -128,21 +133,11 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     }
 
     private void updateButtonState() {
-        if (isServiceRunning(TrackingService.class)) {
+        if (TrackingService.isRunning()) {
             startButton.setText(R.string.stop_tracking);
         } else {
             startButton.setText(R.string.start_tracking);
         }
-    }
-
-    private boolean isServiceRunning(Class<?> serviceClass) {
-        ActivityManager manager = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
-        for (ActivityManager.RunningServiceInfo service : manager.getRunningServices(Integer.MAX_VALUE)) {
-            if (serviceClass.getName().equals(service.service.getClassName())) {
-                return true;
-            }
-        }
-        return false;
     }
 
     @Override
@@ -189,7 +184,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         LatLngBounds bounds = mMap.getProjection().getVisibleRegion().latLngBounds;
         refreshMarkersFromDatabase(bounds);
 
-        // Notify cluster manager that camera changed (it also listens, but good practice if we want custom behavior)
+        // Notify cluster manager that camera changed
         clusterManager.onCameraIdle();
     }
 
@@ -327,9 +322,6 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
 
     /**
      * Improved Weighted Centroid algorithm.
-     * To prevent a large number of weak signals from overwhelming a few strong ones,
-     * we use a higher power for weighting and only consider measurements within
-     * a reasonable range of the strongest detected signal.
      */
     private LatLng calculateWeightedCentroid(List<SignalMeasurement> measurements) {
         if (measurements == null || measurements.isEmpty()) return new LatLng(0,0);
@@ -345,13 +337,11 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         double weightedLng = 0;
 
         for (SignalMeasurement m : measurements) {
-            // 2. Ignore signals that are significantly weaker than our best signal (e.g., >25dB difference)
-            // This prevents "background noise" from distant measurements from pulling the center away.
-            if (m.getSignalStrength() < (maxRssi - 25)) continue;
+            // 2. Ignore signals that are significantly weaker than our best signal
+            if (m.getSignalStrength() < (maxRssi - SIGNAL_FILTER_THRESHOLD_DB)) continue;
 
-            // 3. Use an exponential weight (Power of 6) to heavily favor strong signals.
-            // A -30dBm signal will have vastly more influence than a -60dBm signal.
-            double weight = Math.pow(Math.max(1, 110 + m.getSignalStrength()), 6);
+            // 3. Use an exponential weight to heavily favor strong signals.
+            double weight = Math.pow(Math.max(1, WEIGHT_OFFSET + m.getSignalStrength()), WEIGHT_EXPONENT);
 
             weightedLat += m.getLatitude() * weight;
             weightedLng += m.getLongitude() * weight;
@@ -385,10 +375,16 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         List<String> permissions = new ArrayList<>();
         permissions.add(Manifest.permission.ACCESS_FINE_LOCATION);
         permissions.add(Manifest.permission.ACCESS_COARSE_LOCATION);
+        permissions.add(Manifest.permission.POST_NOTIFICATIONS);
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            permissions.add(Manifest.permission.POST_NOTIFICATIONS);
+            requestPermissionLauncher.launch(permissions.toArray(new String[0]));
+        } else {
+            requestPermissionLauncher.launch(new String[] {
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+            });
         }
-        requestPermissionLauncher.launch(permissions.toArray(new String[0]));
     }
 
     private void clearAllData() {
