@@ -169,6 +169,13 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         mapUpdateHandler.post(mapUpdateRunnable);
     }
 
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+        if (mapUpdateHandler != null && mapUpdateRunnable != null) {
+            mapUpdateHandler.removeCallbacks(mapUpdateRunnable);
+        }
+    }
     private void refreshMarkersFromDatabase() {
         databaseExecutor.execute(() -> {
             List<SignalMeasurement> allMeasurements = db.signalDao().getAllMeasurements();
