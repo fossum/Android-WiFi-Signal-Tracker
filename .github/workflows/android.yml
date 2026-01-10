@@ -21,6 +21,10 @@ jobs:
         distribution: 'temurin'
         cache: gradle
 
+    - name: Accept Android SDK Licenses
+      run: |
+        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || yes | $ANDROID_HOME/tools/bin/sdkmanager --licenses
+
     - name: Create local.properties
       run: echo "MAPS_API_KEY=dummy_key_for_ci_build" > local.properties
 
