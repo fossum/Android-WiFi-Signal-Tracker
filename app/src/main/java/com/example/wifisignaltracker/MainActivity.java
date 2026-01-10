@@ -330,10 +330,18 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         List<String> permissions = new ArrayList<>();
         permissions.add(Manifest.permission.ACCESS_FINE_LOCATION);
         permissions.add(Manifest.permission.ACCESS_COARSE_LOCATION);
+        permissions.add(Manifest.permission.POST_NOTIFICATIONS);
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            permissions.add(Manifest.permission.POST_NOTIFICATIONS);
+            // On Android 13+ request location + notification permissions
+            requestPermissionLauncher.launch(permissions.toArray(new String[0]));
+        } else {
+            // On older versions, POST_NOTIFICATIONS is not a runtime permission
+            requestPermissionLauncher.launch(new String[] {
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+            });
         }
-        requestPermissionLauncher.launch(permissions.toArray(new String[0]));
     }
 
     private void clearAllData() {
