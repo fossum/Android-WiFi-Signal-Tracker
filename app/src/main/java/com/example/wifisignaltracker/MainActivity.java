@@ -49,6 +49,11 @@ import java.util.concurrent.Executors;
  */
 public class MainActivity extends AppCompatActivity implements OnMapReadyCallback, GoogleMap.OnMarkerClickListener {
 
+    // Weighted centroid algorithm constants
+    private static final int SIGNAL_FILTER_THRESHOLD_DB = 25; // Filter signals weaker than max by this amount
+    private static final double WEIGHT_OFFSET = 110.0; // Offset to ensure positive weights (min RSSI ~-110 dBm)
+    private static final double WEIGHT_EXPONENT = 6.0; // Exponential weight to heavily favor strong signals
+
     private GoogleMap mMap;
     private FusedLocationProviderClient fusedLocationClient;
     
@@ -108,7 +113,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
 
     private void toggleService() {
         Intent serviceIntent = new Intent(this, TrackingService.class);
-        if (isServiceRunning(TrackingService.class)) {
+        if (TrackingService.isRunning()) {
             stopService(serviceIntent);
             Toast.makeText(this, "Tracking stopped", Toast.LENGTH_SHORT).show();
         } else {
@@ -119,21 +124,11 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     }
 
     private void updateButtonState() {
-        if (isServiceRunning(TrackingService.class)) {
+        if (TrackingService.isRunning()) {
             startButton.setText(R.string.stop_tracking);
         } else {
             startButton.setText(R.string.start_tracking);
         }
-    }
-
-    private boolean isServiceRunning(Class<?> serviceClass) {
-        ActivityManager manager = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
-        for (ActivityManager.RunningServiceInfo service : manager.getRunningServices(Integer.MAX_VALUE)) {
-            if (serviceClass.getName().equals(service.service.getClassName())) {
-                return true;
-            }
-        }
-        return false;
     }
 
     @Override
@@ -169,13 +164,6 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         mapUpdateHandler.post(mapUpdateRunnable);
     }
 
-    @Override
-    protected void onDestroy() {
-        super.onDestroy();
-        if (mapUpdateHandler != null && mapUpdateRunnable != null) {
-            mapUpdateHandler.removeCallbacks(mapUpdateRunnable);
-        }
-    }
     private void refreshMarkersFromDatabase() {
         databaseExecutor.execute(() -> {
             List<SignalMeasurement> allMeasurements = db.signalDao().getAllMeasurements();
@@ -300,13 +288,13 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         double weightedLng = 0;
 
         for (SignalMeasurement m : measurements) {
-            // 2. Ignore signals that are significantly weaker than our best signal (e.g., >25dB difference)
+            // 2. Ignore signals that are significantly weaker than our best signal
             // This prevents "background noise" from distant measurements from pulling the center away.
-            if (m.getSignalStrength() < (maxRssi - 25)) continue;
+            if (m.getSignalStrength() < (maxRssi - SIGNAL_FILTER_THRESHOLD_DB)) continue;
 
-            // 3. Use an exponential weight (Power of 6) to heavily favor strong signals.
+            // 3. Use an exponential weight to heavily favor strong signals.
             // A -30dBm signal will have vastly more influence than a -60dBm signal.
-            double weight = Math.pow(Math.max(1, 110 + m.getSignalStrength()), 6);
+            double weight = Math.pow(Math.max(1, WEIGHT_OFFSET + m.getSignalStrength()), WEIGHT_EXPONENT);
             
             weightedLat += m.getLatitude() * weight;
             weightedLng += m.getLongitude() * weight;
@@ -373,6 +361,13 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        if (databaseExecutor != null) databaseExecutor.shutdown();
+        // Remove handler callbacks before shutting down executor to prevent IllegalStateException
+        if (mapUpdateHandler != null && mapUpdateRunnable != null) {
+            mapUpdateHandler.removeCallbacks(mapUpdateRunnable);
+        }
+        // Shutdown database executor
+        if (databaseExecutor != null && !databaseExecutor.isShutdown()) {
+            databaseExecutor.shutdown();
+        }
     }
 }

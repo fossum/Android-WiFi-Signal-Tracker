@@ -49,6 +49,9 @@ public class TrackingService extends Service {
     private static final int WIFI_SCAN_INTERVAL_MS = 10000; // 10 seconds in background
     private static final int MIN_SIGNAL_STRENGTH_DBM = -90;
 
+    // Track service running state (alternative to deprecated getRunningServices)
+    private static volatile boolean isRunning = false;
+
     private WifiManager wifiManager;
     private FusedLocationProviderClient fusedLocationClient;
     private LocationCallback locationCallback;
@@ -65,6 +68,7 @@ public class TrackingService extends Service {
     public void onCreate() {
         super.onCreate();
         
+        isRunning = true;
         db = AppDatabase.getDatabase(this);
         databaseExecutor = Executors.newSingleThreadExecutor();
         wifiManager = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
@@ -99,6 +103,10 @@ public class TrackingService extends Service {
             @Override
             public void run() {
                 try {
+                    // Note: startScan() is deprecated and throttled on Android 10+ (API 29).
+                    // The OS limits apps to 4 scans per 2-minute window.
+                    // For production apps, consider using WifiManager.registerScanResultsCallback()
+                    // or implementing exponential backoff to handle throttling.
                     wifiManager.startScan();
                 } catch (Exception e) {
                     Log.e(TAG, "Scan failed", e);
@@ -154,6 +162,14 @@ public class TrackingService extends Service {
 
     @SuppressLint("MissingPermission")
     private void startTracking() {
+        // Check location permission before starting updates
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED) {
+            Log.e(TAG, "Location permission not granted, cannot start tracking");
+            stopSelf();
+            return;
+        }
+        
         LocationRequest locationRequest = new LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 5000)
                 .setMinUpdateIntervalMillis(2000).build();
         
@@ -168,12 +184,31 @@ public class TrackingService extends Service {
     @Override
     public void onDestroy() {
         super.onDestroy();
+        isRunning = false;
         fusedLocationClient.removeLocationUpdates(locationCallback);
-        try {
-            unregisterReceiver(wifiScanReceiver);
-        } catch (Exception ignored) {}
         wifiScanHandler.removeCallbacks(wifiScanRunnable);
-        databaseExecutor.shutdown();
+        
+        // Unregister receiver with proper error handling
+        if (wifiScanReceiver != null) {
+            try {
+                unregisterReceiver(wifiScanReceiver);
+            } catch (IllegalArgumentException e) {
+                // Receiver was not registered, ignore
+            }
+        }
+        
+        // Shutdown database executor
+        if (databaseExecutor != null && !databaseExecutor.isShutdown()) {
+            databaseExecutor.shutdown();
+        }
+    }
+    
+    /**
+     * Check if the tracking service is currently running.
+     * @return true if service is running, false otherwise
+     */
+    public static boolean isRunning() {
+        return isRunning;
     }
 
     @Nullable
