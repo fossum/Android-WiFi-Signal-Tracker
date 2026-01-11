@@ -16,11 +16,10 @@ public class WeightedCentroidTest {
 
     @Test
     public void testCalculateWeightedCentroid_SinglePoint() {
-        MainActivity activity = new MainActivity();
         List<SignalMeasurement> measurements = new ArrayList<>();
         measurements.add(new SignalMeasurement(10.0, 20.0, -50, "TestSSID"));
 
-        LatLng centroid = activity.calculateWeightedCentroid(measurements);
+        LatLng centroid = SignalUtils.calculateWeightedCentroid(measurements);
 
         assertNotNull(centroid);
         assertEquals(10.0, centroid.latitude, 0.0001);
@@ -29,12 +28,11 @@ public class WeightedCentroidTest {
 
     @Test
     public void testCalculateWeightedCentroid_TwoEqualPoints() {
-        MainActivity activity = new MainActivity();
         List<SignalMeasurement> measurements = new ArrayList<>();
         measurements.add(new SignalMeasurement(10.0, 20.0, -50, "TestSSID"));
         measurements.add(new SignalMeasurement(10.0, 22.0, -50, "TestSSID"));
 
-        LatLng centroid = activity.calculateWeightedCentroid(measurements);
+        LatLng centroid = SignalUtils.calculateWeightedCentroid(measurements);
 
         assertNotNull(centroid);
         // Midpoint
@@ -44,14 +42,13 @@ public class WeightedCentroidTest {
 
     @Test
     public void testCalculateWeightedCentroid_StrongerPull() {
-        MainActivity activity = new MainActivity();
         List<SignalMeasurement> measurements = new ArrayList<>();
         // Strong signal at (10, 20)
         measurements.add(new SignalMeasurement(10.0, 20.0, -40, "TestSSID"));
         // Weak signal at (10, 22)
         measurements.add(new SignalMeasurement(10.0, 22.0, -80, "TestSSID"));
 
-        LatLng centroid = activity.calculateWeightedCentroid(measurements);
+        LatLng centroid = SignalUtils.calculateWeightedCentroid(measurements);
 
         assertNotNull(centroid);
         // Should be much closer to 20.0 than 22.0
