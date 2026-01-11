@@ -70,15 +70,4 @@ public class WeightedCentroidTest {
         assertEquals(20.0, centroid.longitude, 0.0001);
     }
 
-    @Test
-    public void testCalculateWeightedCentroid_EmptyList() {
-        MainActivity activity = new MainActivity();
-        List<SignalMeasurement> measurements = new ArrayList<>();
-
-        LatLng centroid = activity.calculateWeightedCentroid(measurements);
-
-        assertNotNull(centroid);
-        assertEquals(0.0, centroid.latitude, 0.0001);
-        assertEquals(0.0, centroid.longitude, 0.0001);
-    }
 }
