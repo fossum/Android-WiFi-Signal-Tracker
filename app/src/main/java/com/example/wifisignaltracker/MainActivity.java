@@ -208,12 +208,15 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
                         bounds.southwest.longitude, bounds.northeast.longitude);
 
                 List<SignalMeasurement> relevantMeasurements = new ArrayList<>();
-                if (!visibleSsids.isEmpty()) {
+                if (visibleSsids != null && !visibleSsids.isEmpty()) {
                     // Batch queries to avoid SQLite limits (approx 999 variables per query)
                     int batchSize = 900;
                     for (int i = 0; i < visibleSsids.size(); i += batchSize) {
                         List<String> batch = visibleSsids.subList(i, Math.min(i + batchSize, visibleSsids.size()));
-                        relevantMeasurements.addAll(db.signalDao().getMeasurementsForSsids(batch));
+                        List<SignalMeasurement> batchMeasurements = db.signalDao().getMeasurementsForSsids(batch);
+                        if (batchMeasurements != null) {
+                            relevantMeasurements.addAll(batchMeasurements);
+                        }
                     }
                 }
 
