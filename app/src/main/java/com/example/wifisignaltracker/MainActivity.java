@@ -2,6 +2,7 @@ package com.example.wifisignaltracker;
 
 import android.Manifest;
 import android.annotation.SuppressLint;
+import android.app.AlertDialog;
 import android.app.ActivityManager;
 import android.content.Context;
 import android.content.Intent;
@@ -33,6 +34,7 @@ import com.google.android.gms.maps.model.Marker;
 import com.google.android.gms.maps.model.MarkerOptions;
 import com.google.android.gms.maps.model.Polyline;
 import com.google.android.gms.maps.model.PolylineOptions;
+import com.google.maps.android.clustering.ClusterManager;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -47,9 +49,17 @@ import java.util.concurrent.Executors;
  * Supports a "Suspected Location" view (default) and a "Detailed View" for individual SSIDs.
  * Uses an improved Weighted Centroid algorithm to estimate broadcast location.
  */
-public class MainActivity extends AppCompatActivity implements OnMapReadyCallback, GoogleMap.OnMarkerClickListener {
+import com.google.maps.android.clustering.Cluster;
+
+/**
+ * MainActivity handles UI and visualizes WiFi signal data.
+ * Supports a "Suspected Location" view (default) and a "Detailed View" for individual SSIDs.
+ * Uses an improved Weighted Centroid algorithm to estimate broadcast location.
+ */
+public class MainActivity extends AppCompatActivity implements OnMapReadyCallback, GoogleMap.OnMarkerClickListener, ClusterManager.OnClusterItemClickListener<WifiClusterItem>, ClusterManager.OnClusterClickListener<WifiClusterItem> {
 
     private GoogleMap mMap;
+    private ClusterManager<WifiClusterItem> mClusterManager;
     private FusedLocationProviderClient fusedLocationClient;
     
     private Button startButton;
@@ -72,7 +82,6 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
                 if (Boolean.TRUE.equals(result.getOrDefault(Manifest.permission.ACCESS_FINE_LOCATION, false))) {
                     // Precise location access granted.
                     enableMyLocationUI();
-                    startMapUpdates();
                 }
             });
 
@@ -110,9 +119,13 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         Intent serviceIntent = new Intent(this, TrackingService.class);
         if (TrackingService.isRunning()) {
             stopService(serviceIntent);
+            stopMapUpdates(); // Stop refreshing when service is stopped
             Toast.makeText(this, "Tracking stopped", Toast.LENGTH_SHORT).show();
         } else {
             ContextCompat.startForegroundService(this, serviceIntent);
+            if (mMap != null) {
+                startMapUpdates(); // Start refreshing when service starts and map is ready
+            }
             Toast.makeText(this, "Tracking started in background", Toast.LENGTH_SHORT).show();
         }
         updateButtonState();
@@ -129,7 +142,28 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     @Override
     public void onMapReady(@NonNull GoogleMap googleMap) {
         mMap = googleMap;
-        mMap.setOnMarkerClickListener(this);
+
+        // Initialize ClusterManager
+        mClusterManager = new ClusterManager<>(this, mMap);
+        mClusterManager.setOnClusterItemClickListener(this);
+        mClusterManager.setOnClusterClickListener(this);
+
+        // Debounce database refreshes triggered by camera movements
+        final Handler cameraIdleHandler = new Handler(Looper.getMainLooper());
+        final Runnable[] refreshMarkersTask = new Runnable[1];
+
+        // Point the map's listeners at the ClusterManager
+        mMap.setOnCameraIdleListener(() -> {
+            mClusterManager.onCameraIdle();
+
+            // Debounce refreshMarkersFromDatabase to avoid excessive database queries
+            if (refreshMarkersTask[0] != null) {
+                cameraIdleHandler.removeCallbacks(refreshMarkersTask[0]);
+            }
+            refreshMarkersTask[0] = () -> refreshMarkersFromDatabase();
+            cameraIdleHandler.postDelayed(refreshMarkersTask[0], 300);
+        });
+        mMap.setOnMarkerClickListener(mClusterManager);
         
         // Reset to non-detailed view when clicking on blank part of map
         mMap.setOnMapClickListener(latLng -> {
@@ -142,35 +176,85 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
                 == PackageManager.PERMISSION_GRANTED) {
             enableMyLocationUI();
-            startMapUpdates();
         }
+        // Initial data load after the map has finished loading and bounds are available
+        mMap.setOnMapLoadedCallback(() -> refreshMarkersFromDatabase());
     }
 
     private void startMapUpdates() {
+        if (mapUpdateRunnable != null) return; // Already running
+
         mapUpdateRunnable = new Runnable() {
             @Override
             public void run() {
-                if (selectedSsid == null) {
-                    refreshMarkersFromDatabase();
-                }
-                mapUpdateHandler.postDelayed(this, 5000);
+                refreshMarkersFromDatabase();
+                mapUpdateHandler.postDelayed(this, 5000); // Poll every 5 seconds
             }
         };
         mapUpdateHandler.post(mapUpdateRunnable);
     }
 
+    private void stopMapUpdates() {
+        if (mapUpdateRunnable != null) {
+            mapUpdateHandler.removeCallbacks(mapUpdateRunnable);
+            mapUpdateRunnable = null;
+        }
+    }
+
     private void refreshMarkersFromDatabase() {
+        // Determine the bounds *before* going to the background thread
+        // This must be done on the main thread
+        final com.google.android.gms.maps.model.LatLngBounds bounds;
+        if (mMap != null && selectedSsid == null) {
+            bounds = mMap.getProjection().getVisibleRegion().latLngBounds;
+        } else {
+            bounds = null;
+        }
+
         databaseExecutor.execute(() -> {
-            List<SignalMeasurement> allMeasurements = db.signalDao().getAllMeasurements();
-            runOnUiThread(() -> {
-                clearMapVisuals();
+            if (selectedSsid == null) {
+                // Summary View: Load based on bounds
+                if (bounds == null) return;
                 
-                if (selectedSsid == null) {
-                    showSummaryView(allMeasurements);
-                } else {
-                    showDetailedView(allMeasurements);
+                List<String> visibleSsids = db.signalDao().getUniqueSsidsInBounds(
+                        bounds.southwest.latitude, bounds.northeast.latitude,
+                        bounds.southwest.longitude, bounds.northeast.longitude);
+
+                List<SignalMeasurement> relevantMeasurements = new ArrayList<>();
+                if (visibleSsids != null && !visibleSsids.isEmpty()) {
+                    // Batch queries to avoid SQLite limits (approx 999 variables per query)
+                    int batchSize = 900;
+                    for (int i = 0; i < visibleSsids.size(); i += batchSize) {
+                        List<String> batch = visibleSsids.subList(i, Math.min(i + batchSize, visibleSsids.size()));
+                        List<SignalMeasurement> batchMeasurements = db.signalDao().getMeasurementsForSsids(batch);
+                        if (batchMeasurements != null) {
+                            relevantMeasurements.addAll(batchMeasurements);
+                        }
+                    }
                 }
-            });
+
+                final List<SignalMeasurement> finalMeasurements = relevantMeasurements;
+                runOnUiThread(() -> {
+                    mClusterManager.clearItems(); // Clear previous clusters
+                    clearMapVisuals(); // Clear any manual markers just in case
+                    // Switch listener to ClusterManager for Summary View
+                    mMap.setOnMarkerClickListener(mClusterManager);
+                    showSummaryView(finalMeasurements);
+                    mClusterManager.cluster(); // Force re-clustering
+                });
+            } else {
+                // Detailed View: Load specifically for the selected SSID
+                // We use existing getMeasurementsBySsid or reuse the bulk fetch if we had it
+                List<SignalMeasurement> measurements = db.signalDao().getMeasurementsBySsid(selectedSsid);
+                runOnUiThread(() -> {
+                    mClusterManager.clearItems();
+                    mClusterManager.cluster(); // Clear clusters visually
+                    clearMapVisuals();
+                    // Switch listener to 'this' for Detailed View (manual markers)
+                    mMap.setOnMarkerClickListener(MainActivity.this);
+                    showDetailedView(measurements);
+                });
+            }
         });
     }
 
@@ -181,12 +265,12 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             String ssid = entry.getKey();
             LatLng suspectedLoc = SignalUtils.calculateWeightedCentroid(entry.getValue());
             
-            Marker marker = mMap.addMarker(new MarkerOptions()
-                    .position(suspectedLoc)
-                    .title("Suspected: " + ssid)
-                    .snippet(ssid)
-                    .icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_AZURE)));
-            if (marker != null) markers.add(marker);
+            // Add to ClusterManager instead of direct map markers
+            WifiClusterItem item = new WifiClusterItem(
+                    suspectedLoc.latitude, suspectedLoc.longitude,
+                    "Suspected: " + ssid, ssid
+            );
+            mClusterManager.addItem(item);
         }
         
         signalInfoText.setText(String.format(Locale.getDefault(), "Viewing %d unique networks", grouped.size()));
@@ -250,14 +334,58 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
 
     @Override
     public boolean onMarkerClick(@NonNull Marker marker) {
+        // This listener is only active in Detailed View.
         String ssid = marker.getSnippet();
+        if (ssid != null && ssid.equals(selectedSsid)) {
+            // Click on a measurement marker within the active detailed view.
+            // Show its info window and consume the event to prevent the map click listener from resetting the view.
+            marker.showInfoWindow();
+            return true; // Consume the event.
+        }
+
+        // Fallback case: If a marker with a *different* SSID is clicked (which shouldn't happen in detailed view),
+        // switch to that SSID's detailed view.
         if (ssid != null) {
-            if (ssid.equals(selectedSsid)) {
-                return false;
-            }
             selectedSsid = ssid;
             refreshMarkersFromDatabase();
             mMap.animateCamera(CameraUpdateFactory.newLatLng(marker.getPosition()));
+            return true;
+        }
+
+        // If it's a marker with no info, let the default behavior happen.
+        return false;
+    }
+
+    @Override
+    public boolean onClusterClick(Cluster<WifiClusterItem> cluster) {
+        // Instead of zooming, show a dialog with the list of SSIDs in the cluster
+        final List<String> ssids = new ArrayList<>();
+        for (WifiClusterItem item : cluster.getItems()) {
+            ssids.add(item.getSnippet());
+        }
+
+        final CharSequence[] items = ssids.toArray(new CharSequence[0]);
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("Select a WiFi Network from this cluster");
+        builder.setItems(items, (dialog, which) -> {
+            selectedSsid = (String) items[which];
+            refreshMarkersFromDatabase();
+            // We can also move the camera to the selected item's position, but cluster position is fine
+            mMap.animateCamera(CameraUpdateFactory.newLatLng(cluster.getPosition()));
+        });
+        builder.show();
+        
+        return true;
+    }
+
+    @Override
+    public boolean onClusterItemClick(WifiClusterItem item) {
+        String ssid = item.getSnippet(); // Use snippet which holds the raw SSID
+        if (ssid != null) {
+            selectedSsid = ssid;
+            refreshMarkersFromDatabase();
+            mMap.animateCamera(CameraUpdateFactory.newLatLng(item.getPosition()));
             return true;
         }
         return false;
@@ -314,13 +442,15 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     protected void onResume() {
         super.onResume();
         updateButtonState();
-        if (mMap != null) startMapUpdates();
+        if (TrackingService.isRunning()) {
+            startMapUpdates(); // Re-start updates if the service is running
+        }
     }
 
     @Override
     protected void onPause() {
         super.onPause();
-        mapUpdateHandler.removeCallbacks(mapUpdateRunnable);
+        stopMapUpdates(); // Always stop updates when the app is paused
     }
 
     @Override
