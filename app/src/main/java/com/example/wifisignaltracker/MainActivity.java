@@ -148,10 +148,20 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         mClusterManager.setOnClusterItemClickListener(this);
         mClusterManager.setOnClusterClickListener(this);
 
+        // Debounce database refreshes triggered by camera movements
+        final Handler cameraIdleHandler = new Handler(Looper.getMainLooper());
+        final Runnable[] refreshMarkersTask = new Runnable[1];
+
         // Point the map's listeners at the ClusterManager
         mMap.setOnCameraIdleListener(() -> {
             mClusterManager.onCameraIdle();
-            refreshMarkersFromDatabase();
+
+            // Debounce refreshMarkersFromDatabase to avoid excessive database queries
+            if (refreshMarkersTask[0] != null) {
+                cameraIdleHandler.removeCallbacks(refreshMarkersTask[0]);
+            }
+            refreshMarkersTask[0] = () -> refreshMarkersFromDatabase();
+            cameraIdleHandler.postDelayed(refreshMarkersTask[0], 300);
         });
         mMap.setOnMarkerClickListener(mClusterManager);
         
@@ -167,8 +177,8 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
                 == PackageManager.PERMISSION_GRANTED) {
             enableMyLocationUI();
         }
-        // Initial data load
-        refreshMarkersFromDatabase();
+        // Initial data load after the map has finished loading and bounds are available
+        mMap.setOnMapLoadedCallback(() -> refreshMarkersFromDatabase());
     }
 
     private void startMapUpdates() {
