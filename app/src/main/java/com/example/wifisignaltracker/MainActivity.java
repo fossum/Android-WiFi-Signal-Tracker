@@ -2,6 +2,7 @@ package com.example.wifisignaltracker;
 
 import android.Manifest;
 import android.annotation.SuppressLint;
+import android.app.AlertDialog;
 import android.app.ActivityManager;
 import android.content.Context;
 import android.content.Intent;
@@ -86,7 +87,6 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
                 if (Boolean.TRUE.equals(result.getOrDefault(Manifest.permission.ACCESS_FINE_LOCATION, false))) {
                     // Precise location access granted.
                     enableMyLocationUI();
-                    startMapUpdates();
                 }
             });
 
@@ -124,9 +124,11 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         Intent serviceIntent = new Intent(this, TrackingService.class);
         if (TrackingService.isRunning()) {
             stopService(serviceIntent);
+            stopMapUpdates(); // Stop refreshing when service is stopped
             Toast.makeText(this, "Tracking stopped", Toast.LENGTH_SHORT).show();
         } else {
             ContextCompat.startForegroundService(this, serviceIntent);
+            startMapUpdates(); // Start refreshing when service starts
             Toast.makeText(this, "Tracking started in background", Toast.LENGTH_SHORT).show();
         }
         updateButtonState();
@@ -149,7 +151,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         mClusterManager.setOnClusterItemClickListener(this);
         mClusterManager.setOnClusterClickListener(this);
 
-        // Point the map's listeners at the ClusterManager
+        // Point the map\'s listeners at the ClusterManager
         mMap.setOnCameraIdleListener(() -> {
             mClusterManager.onCameraIdle();
             refreshMarkersFromDatabase();
@@ -167,25 +169,29 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
                 == PackageManager.PERMISSION_GRANTED) {
             enableMyLocationUI();
-            startMapUpdates();
         }
+        // Initial data load
+        refreshMarkersFromDatabase();
     }
 
     private void startMapUpdates() {
-        // We now rely on OnCameraIdleListener for map movement updates
-        // But we still might want periodic updates if the user is stationary but data is coming in.
-        // For now, let's keep the periodic update but make it respect the new logic.
+        if (mapUpdateRunnable != null) return; // Already running
+
         mapUpdateRunnable = new Runnable() {
             @Override
             public void run() {
-                // If detailed view is open, refresh it.
-                // If summary view, the camera idle listener handles major updates,
-                // but we can trigger a refresh if needed.
                 refreshMarkersFromDatabase();
-                mapUpdateHandler.postDelayed(this, 5000);
+                mapUpdateHandler.postDelayed(this, 5000); // Poll every 5 seconds
             }
         };
         mapUpdateHandler.post(mapUpdateRunnable);
+    }
+
+    private void stopMapUpdates() {
+        if (mapUpdateRunnable != null) {
+            mapUpdateHandler.removeCallbacks(mapUpdateRunnable);
+            mapUpdateRunnable = null;
+        }
     }
 
     private void refreshMarkersFromDatabase() {
@@ -237,7 +243,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
                     mClusterManager.clearItems();
                     mClusterManager.cluster(); // Clear clusters visually
                     clearMapVisuals();
-                    // Switch listener to 'this' for Detailed View (manual markers)
+                    // Switch listener to \'this\' for Detailed View (manual markers)
                     mMap.setOnMarkerClickListener(MainActivity.this);
                     showDetailedView(measurements);
                 });
@@ -321,32 +327,48 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
 
     @Override
     public boolean onMarkerClick(@NonNull Marker marker) {
-        // This is still used for non-clustered markers (Detailed View)
-        // because when selectedSsid != null, we might not use ClusterManager for clicks
-        // depending on how we switch modes.
-        // However, since we set mMap.setOnMarkerClickListener(mClusterManager),
-        // this method might not be called directly by the map unless we proxy it.
-        // But for detailed view we might temporarily bypass ClusterManager.
-
+        // This listener is only active in Detailed View.
         String ssid = marker.getSnippet();
+        if (ssid != null && ssid.equals(selectedSsid)) {
+            // Click on a measurement marker within the active detailed view.
+            // Show its info window and consume the event to prevent the map click listener from resetting the view.
+            marker.showInfoWindow();
+            return true; // Consume the event.
+        }
+
+        // Fallback case: If a marker with a *different* SSID is clicked (which shouldn't happen in detailed view),
+        // switch to that SSID's detailed view.
         if (ssid != null) {
-            if (ssid.equals(selectedSsid)) {
-                return false;
-            }
             selectedSsid = ssid;
             refreshMarkersFromDatabase();
             mMap.animateCamera(CameraUpdateFactory.newLatLng(marker.getPosition()));
             return true;
         }
+
+        // If it's a marker with no info, let the default behavior happen.
         return false;
     }
 
     @Override
     public boolean onClusterClick(Cluster<WifiClusterItem> cluster) {
-        // Zoom in when a cluster is clicked
-        float currentZoom = mMap.getCameraPosition().zoom;
-        mMap.animateCamera(CameraUpdateFactory.newLatLngZoom(
-                cluster.getPosition(), currentZoom + 2));
+        // Instead of zooming, show a dialog with the list of SSIDs in the cluster
+        final List<String> ssids = new ArrayList<>();
+        for (WifiClusterItem item : cluster.getItems()) {
+            ssids.add(item.getSnippet());
+        }
+
+        final CharSequence[] items = ssids.toArray(new CharSequence[0]);
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle("Select a WiFi Network from this cluster");
+        builder.setItems(items, (dialog, which) -> {
+            selectedSsid = (String) items[which];
+            refreshMarkersFromDatabase();
+            // We can also move the camera to the selected item\'s position, but cluster position is fine
+            mMap.animateCamera(CameraUpdateFactory.newLatLng(cluster.getPosition()));
+        });
+        builder.show();
+        
         return true;
     }
 
@@ -451,13 +473,15 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     protected void onResume() {
         super.onResume();
         updateButtonState();
-        if (mMap != null) startMapUpdates();
+        if (TrackingService.isRunning()) {
+            startMapUpdates(); // Re-start updates if the service is running
+        }
     }
 
     @Override
     protected void onPause() {
         super.onPause();
-        mapUpdateHandler.removeCallbacks(mapUpdateRunnable);
+        stopMapUpdates(); // Always stop updates when the app is paused
     }
 
     @Override

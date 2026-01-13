@@ -28,4 +28,9 @@ public class WifiClusterItem implements ClusterItem {
     public String getSnippet() {
         return snippet;
     }
+
+    @Override
+    public Float getZIndex() {
+        return 0.0f;
+    }
 }
