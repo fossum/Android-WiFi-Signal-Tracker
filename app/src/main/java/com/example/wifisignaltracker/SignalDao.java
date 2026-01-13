@@ -26,7 +26,9 @@ public interface SignalDao {
     @Query("SELECT DISTINCT ssid FROM measurements")
     List<String> getUniqueSsids();
 
-    @Query("SELECT DISTINCT ssid FROM measurements WHERE latitude BETWEEN :minLat AND :maxLat AND longitude BETWEEN :minLng AND :maxLng")
+    @Query("SELECT DISTINCT ssid FROM measurements WHERE latitude BETWEEN :minLat AND :maxLat AND " +
+           "((:minLng <= :maxLng AND longitude BETWEEN :minLng AND :maxLng) OR " +
+           " (:minLng > :maxLng AND (longitude >= :minLng OR longitude <= :maxLng)))")
     List<String> getUniqueSsidsInBounds(double minLat, double maxLat, double minLng, double maxLng);
 
     @Query("SELECT * FROM measurements WHERE ssid IN (:ssids)")

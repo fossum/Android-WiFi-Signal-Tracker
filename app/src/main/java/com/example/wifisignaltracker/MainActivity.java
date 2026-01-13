@@ -238,7 +238,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
                     mClusterManager.clearItems();
                     mClusterManager.cluster(); // Clear clusters visually
                     clearMapVisuals();
-                    // Switch listener to \'this\' for Detailed View (manual markers)
+                    // Switch listener to 'this' for Detailed View (manual markers)
                     mMap.setOnMarkerClickListener(MainActivity.this);
                     showDetailedView(measurements);
                 });
@@ -359,7 +359,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         builder.setItems(items, (dialog, which) -> {
             selectedSsid = (String) items[which];
             refreshMarkersFromDatabase();
-            // We can also move the camera to the selected item\'s position, but cluster position is fine
+            // We can also move the camera to the selected item's position, but cluster position is fine
             mMap.animateCamera(CameraUpdateFactory.newLatLng(cluster.getPosition()));
         });
         builder.show();
