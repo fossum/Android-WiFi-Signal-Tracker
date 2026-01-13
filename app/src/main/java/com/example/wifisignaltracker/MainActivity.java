@@ -123,7 +123,9 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             Toast.makeText(this, "Tracking stopped", Toast.LENGTH_SHORT).show();
         } else {
             ContextCompat.startForegroundService(this, serviceIntent);
-            startMapUpdates(); // Start refreshing when service starts
+            if (mMap != null) {
+                startMapUpdates(); // Start refreshing when service starts and map is ready
+            }
             Toast.makeText(this, "Tracking started in background", Toast.LENGTH_SHORT).show();
         }
         updateButtonState();
@@ -146,7 +148,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         mClusterManager.setOnClusterItemClickListener(this);
         mClusterManager.setOnClusterClickListener(this);
 
-        // Point the map\'s listeners at the ClusterManager
+        // Point the map's listeners at the ClusterManager
         mMap.setOnCameraIdleListener(() -> {
             mClusterManager.onCameraIdle();
             refreshMarkersFromDatabase();
