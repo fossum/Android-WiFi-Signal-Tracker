@@ -508,13 +508,17 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         };
 
         // Find current selection based on the saved interval value
+        // Fallback to default if saved value is not in the list
         int currentSelection = 0;
+        boolean found = false;
         for (int i = 0; i < intervalValues.length; i++) {
             if (intervalValues[i] == currentInterval) {
                 currentSelection = i;
+                found = true;
                 break;
-            } else if (intervalValues[i] == DEFAULT_SCAN_INTERVAL) {
-                currentSelection = i; // Fallback to default if saved value not found
+            }
+            if (intervalValues[i] == DEFAULT_SCAN_INTERVAL) {
+                currentSelection = i; // Remember default position for fallback
             }
         }
 
