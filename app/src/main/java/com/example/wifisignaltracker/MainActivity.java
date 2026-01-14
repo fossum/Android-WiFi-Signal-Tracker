@@ -37,6 +37,7 @@ import com.google.android.gms.maps.model.PolylineOptions;
 import com.google.maps.android.clustering.ClusterManager;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -363,6 +364,9 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         for (WifiClusterItem item : cluster.getItems()) {
             ssids.add(item.getSnippet());
         }
+
+        // Sort SSIDs alphabetically, case-insensitive
+        Collections.sort(ssids, String.CASE_INSENSITIVE_ORDER);
 
         final CharSequence[] items = ssids.toArray(new CharSequence[0]);
 
