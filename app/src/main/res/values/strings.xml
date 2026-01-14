@@ -13,4 +13,5 @@
     <string name="scan_interval_label">WiFi Scan Interval (seconds)</string>
     <string name="scan_interval_help">Choose how often to scan for WiFi signals. Lower values collect more data points but use more battery.</string>
     <string name="settings_saved">Settings saved</string>
+    <string name="restart_tracking_required">Please restart tracking to apply new interval</string>
 </resources>

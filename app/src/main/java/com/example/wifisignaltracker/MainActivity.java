@@ -15,7 +15,6 @@ import android.os.Handler;
 import android.os.Looper;
 import android.view.Menu;
 import android.view.MenuItem;
-import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -530,7 +529,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             
             // If service is running, inform user to restart tracking
             if (TrackingService.isRunning()) {
-                Toast.makeText(this, "Please restart tracking to apply new interval", 
+                Toast.makeText(this, R.string.restart_tracking_required, 
                         Toast.LENGTH_LONG).show();
             }
             
