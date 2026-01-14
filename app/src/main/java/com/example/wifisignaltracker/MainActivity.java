@@ -500,11 +500,11 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         // Scan interval options: 2, 5, 10, 15, 30 seconds
         final int[] intervalValues = {2, 5, 10, 15, 30};
         final String[] intervalLabels = {
-            "2 seconds (High data, high battery use)",
-            "5 seconds (Good balance)",
-            "10 seconds (Default)",
-            "15 seconds",
-            "30 seconds (Low battery use)"
+            getString(R.string.interval_2s),
+            getString(R.string.interval_5s),
+            getString(R.string.interval_10s),
+            getString(R.string.interval_15s),
+            getString(R.string.interval_30s)
         };
 
         // Find current selection
@@ -535,7 +535,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             
             dialog.dismiss();
         });
-        builder.setNegativeButton("Cancel", (dialog, which) -> dialog.dismiss());
+        builder.setNegativeButton(R.string.cancel, (dialog, which) -> dialog.dismiss());
         builder.show();
     }
 }

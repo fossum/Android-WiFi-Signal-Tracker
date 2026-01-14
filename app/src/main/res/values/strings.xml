@@ -14,4 +14,10 @@
     <string name="scan_interval_help">Choose how often to scan for WiFi signals. Lower values collect more data points but use more battery.</string>
     <string name="settings_saved">Settings saved</string>
     <string name="restart_tracking_required">Please restart tracking to apply new interval</string>
+    <string name="cancel">Cancel</string>
+    <string name="interval_2s">2 seconds (High data, high battery use)</string>
+    <string name="interval_5s">5 seconds (Good balance)</string>
+    <string name="interval_10s">10 seconds (Default)</string>
+    <string name="interval_15s">15 seconds</string>
+    <string name="interval_30s">30 seconds (Low battery use)</string>
 </resources>
