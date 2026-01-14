@@ -359,10 +359,12 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     @Override
     public boolean onClusterClick(Cluster<WifiClusterItem> cluster) {
         // Instead of zooming, show a dialog with the list of SSIDs in the cluster
-        final List<String> ssids = new ArrayList<>();
+        List<String> ssids = new ArrayList<>();
         for (WifiClusterItem item : cluster.getItems()) {
             ssids.add(item.getSnippet());
         }
+
+        ssids = SignalUtils.sortSsids(ssids);
 
         final CharSequence[] items = ssids.toArray(new CharSequence[0]);
 
