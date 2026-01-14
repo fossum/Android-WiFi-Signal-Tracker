@@ -507,11 +507,15 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             getString(R.string.interval_30s)
         };
 
-        // Find current selection
-        int currentSelection = 2; // default to 10 seconds
+        // Find current selection based on the saved interval value
+        // Default to the index matching DEFAULT_SCAN_INTERVAL (10 seconds)
+        int currentSelection = 0;
         for (int i = 0; i < intervalValues.length; i++) {
+            if (intervalValues[i] == DEFAULT_SCAN_INTERVAL) {
+                currentSelection = i; // Find default index
+            }
             if (intervalValues[i] == currentInterval) {
-                currentSelection = i;
+                currentSelection = i; // Override with saved value if found
                 break;
             }
         }
