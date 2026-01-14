@@ -508,14 +508,20 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         };
 
         // Find current selection based on the saved interval value
-        // Default to the index matching DEFAULT_SCAN_INTERVAL (10 seconds)
-        int currentSelection = 0;
+        // First find the default index (matching DEFAULT_SCAN_INTERVAL)
+        int defaultIndex = 0;
         for (int i = 0; i < intervalValues.length; i++) {
             if (intervalValues[i] == DEFAULT_SCAN_INTERVAL) {
-                currentSelection = i; // Find default index
+                defaultIndex = i;
+                break;
             }
+        }
+        
+        // Then check if we have a saved value that differs from default
+        int currentSelection = defaultIndex;
+        for (int i = 0; i < intervalValues.length; i++) {
             if (intervalValues[i] == currentInterval) {
-                currentSelection = i; // Override with saved value if found
+                currentSelection = i;
                 break;
             }
         }
@@ -528,7 +534,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             editor.putInt(KEY_SCAN_INTERVAL, selectedInterval);
             editor.apply();
             
-            Toast.makeText(this, getString(R.string.settings_saved) + " (" + selectedInterval + "s)", 
+            Toast.makeText(this, getString(R.string.settings_saved_with_interval, selectedInterval), 
                     Toast.LENGTH_SHORT).show();
             
             // If service is running, inform user to restart tracking
