@@ -6,12 +6,16 @@ import android.app.AlertDialog;
 import android.app.ActivityManager;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.view.Menu;
+import android.view.MenuItem;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -57,6 +61,10 @@ import com.google.maps.android.clustering.Cluster;
  * Uses an improved Weighted Centroid algorithm to estimate broadcast location.
  */
 public class MainActivity extends AppCompatActivity implements OnMapReadyCallback, GoogleMap.OnMarkerClickListener, ClusterManager.OnClusterItemClickListener<WifiClusterItem>, ClusterManager.OnClusterClickListener<WifiClusterItem> {
+
+    private static final String PREFS_NAME = "WifiTrackerPrefs";
+    private static final String KEY_SCAN_INTERVAL = "scan_interval_seconds";
+    private static final int DEFAULT_SCAN_INTERVAL = 10; // seconds
 
     private GoogleMap mMap;
     private ClusterManager<WifiClusterItem> mClusterManager;
@@ -122,6 +130,11 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             stopMapUpdates(); // Stop refreshing when service is stopped
             Toast.makeText(this, "Tracking stopped", Toast.LENGTH_SHORT).show();
         } else {
+            // Pass the scan interval to the service
+            SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+            int scanInterval = prefs.getInt(KEY_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL);
+            serviceIntent.putExtra(TrackingService.EXTRA_SCAN_INTERVAL, scanInterval);
+            
             ContextCompat.startForegroundService(this, serviceIntent);
             if (mMap != null) {
                 startMapUpdates(); // Start refreshing when service starts and map is ready
@@ -464,5 +477,66 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         if (databaseExecutor != null && !databaseExecutor.isShutdown()) {
             databaseExecutor.shutdown();
         }
+    }
+
+    @Override
+    public boolean onCreateOptionsMenu(Menu menu) {
+        getMenuInflater().inflate(R.menu.main_menu, menu);
+        return true;
+    }
+
+    @Override
+    public boolean onOptionsItemSelected(@NonNull MenuItem item) {
+        if (item.getItemId() == R.id.action_settings) {
+            showSettingsDialog();
+            return true;
+        }
+        return super.onOptionsItemSelected(item);
+    }
+
+    private void showSettingsDialog() {
+        SharedPreferences prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE);
+        int currentInterval = prefs.getInt(KEY_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL);
+
+        // Scan interval options: 2, 5, 10, 15, 30 seconds
+        final int[] intervalValues = {2, 5, 10, 15, 30};
+        final String[] intervalLabels = {
+            "2 seconds (High data, high battery use)",
+            "5 seconds (Good balance)",
+            "10 seconds (Default)",
+            "15 seconds",
+            "30 seconds (Low battery use)"
+        };
+
+        // Find current selection
+        int currentSelection = 2; // default to 10 seconds
+        for (int i = 0; i < intervalValues.length; i++) {
+            if (intervalValues[i] == currentInterval) {
+                currentSelection = i;
+                break;
+            }
+        }
+
+        AlertDialog.Builder builder = new AlertDialog.Builder(this);
+        builder.setTitle(R.string.settings_title);
+        builder.setSingleChoiceItems(intervalLabels, currentSelection, (dialog, which) -> {
+            int selectedInterval = intervalValues[which];
+            SharedPreferences.Editor editor = prefs.edit();
+            editor.putInt(KEY_SCAN_INTERVAL, selectedInterval);
+            editor.apply();
+            
+            Toast.makeText(this, getString(R.string.settings_saved) + " (" + selectedInterval + "s)", 
+                    Toast.LENGTH_SHORT).show();
+            
+            // If service is running, inform user to restart tracking
+            if (TrackingService.isRunning()) {
+                Toast.makeText(this, "Please restart tracking to apply new interval", 
+                        Toast.LENGTH_LONG).show();
+            }
+            
+            dialog.dismiss();
+        });
+        builder.setNegativeButton("Cancel", (dialog, which) -> dialog.dismiss());
+        builder.show();
     }
 }

@@ -46,11 +46,15 @@ public class TrackingService extends Service {
     private static final String TAG = "TrackingService";
     private static final String CHANNEL_ID = "TrackingServiceChannel";
     private static final int NOTIFICATION_ID = 1;
-    private static final int WIFI_SCAN_INTERVAL_MS = 10000; // 10 seconds in background
+    private static final int DEFAULT_WIFI_SCAN_INTERVAL_MS = 10000; // 10 seconds default
     private static final int MIN_SIGNAL_STRENGTH_DBM = -90;
+    
+    public static final String EXTRA_SCAN_INTERVAL = "scan_interval_seconds";
 
     // Track service running state (alternative to deprecated getRunningServices)
     private static volatile boolean isRunning = false;
+    
+    private int wifiScanIntervalMs = DEFAULT_WIFI_SCAN_INTERVAL_MS;
 
     private WifiManager wifiManager;
     private FusedLocationProviderClient fusedLocationClient;
@@ -111,7 +115,7 @@ public class TrackingService extends Service {
                 } catch (Exception e) {
                     Log.e(TAG, "Scan failed", e);
                 }
-                wifiScanHandler.postDelayed(this, WIFI_SCAN_INTERVAL_MS);
+                wifiScanHandler.postDelayed(this, wifiScanIntervalMs);
             }
         };
     }
@@ -140,6 +144,13 @@ public class TrackingService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        // Get the scan interval from the intent if provided
+        if (intent != null && intent.hasExtra(EXTRA_SCAN_INTERVAL)) {
+            int scanIntervalSeconds = intent.getIntExtra(EXTRA_SCAN_INTERVAL, 10);
+            wifiScanIntervalMs = scanIntervalSeconds * 1000;
+            Log.d(TAG, "Using scan interval: " + scanIntervalSeconds + " seconds");
+        }
+        
         createNotificationChannel();
         
         Intent notificationIntent = new Intent(this, MainActivity.class);
