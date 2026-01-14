@@ -1,6 +1,8 @@
 package com.example.wifisignaltracker;
 
 import com.google.android.gms.maps.model.LatLng;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 public class SignalUtils {
@@ -9,6 +11,18 @@ public class SignalUtils {
     private static final int SIGNAL_FILTER_THRESHOLD_DB = 25; // Filter signals weaker than max by this amount
     private static final double WEIGHT_OFFSET = 110.0; // Offset to ensure positive weights (min RSSI ~-110 dBm)
     private static final double WEIGHT_EXPONENT = 6.0; // Exponential weight to heavily favor strong signals
+
+    /**
+     * Sorts a list of SSIDs alphabetically (case-insensitive).
+     * @param ssids The list of SSIDs to sort.
+     * @return A new sorted list of SSIDs.
+     */
+    public static List<String> sortSsids(List<String> ssids) {
+        if (ssids == null) return new ArrayList<>();
+        List<String> sorted = new ArrayList<>(ssids);
+        Collections.sort(sorted, String.CASE_INSENSITIVE_ORDER);
+        return sorted;
+    }
 
     /**
      * Improved Weighted Centroid algorithm.
