@@ -3,15 +3,20 @@ package com.example.wifisignaltracker;
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.AlertDialog;
-import android.app.ActivityManager;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.view.Menu;
+import android.view.MenuInflater;
+import android.view.MenuItem;
 import android.widget.Button;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -21,6 +26,7 @@ import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.ContextCompat;
+import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 
 import com.google.android.gms.location.FusedLocationProviderClient;
 import com.google.android.gms.location.LocationServices;
@@ -34,8 +40,14 @@ import com.google.android.gms.maps.model.Marker;
 import com.google.android.gms.maps.model.MarkerOptions;
 import com.google.android.gms.maps.model.Polyline;
 import com.google.android.gms.maps.model.PolylineOptions;
+import com.google.maps.android.clustering.Cluster;
 import com.google.maps.android.clustering.ClusterManager;
 
+import java.io.BufferedReader;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -44,38 +56,33 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-/**
- * MainActivity handles UI and visualizes WiFi signal data.
- * Supports a "Suspected Location" view (default) and a "Detailed View" for individual SSIDs.
- * Uses an improved Weighted Centroid algorithm to estimate broadcast location.
- */
-import com.google.maps.android.clustering.Cluster;
-
-/**
- * MainActivity handles UI and visualizes WiFi signal data.
- * Supports a "Suspected Location" view (default) and a "Detailed View" for individual SSIDs.
- * Uses an improved Weighted Centroid algorithm to estimate broadcast location.
- */
 public class MainActivity extends AppCompatActivity implements OnMapReadyCallback, GoogleMap.OnMarkerClickListener, ClusterManager.OnClusterItemClickListener<WifiClusterItem>, ClusterManager.OnClusterClickListener<WifiClusterItem> {
+
+    // Weighted centroid algorithm constants
+    private static final int SIGNAL_FILTER_THRESHOLD_DB = 25; // Filter signals weaker than max by this amount
+    private static final double WEIGHT_OFFSET = 110.0; // Offset to ensure positive weights (min RSSI ~-110 dBm)
+    private static final double WEIGHT_EXPONENT = 6.0; // Exponential weight to heavily favor strong signals
 
     private GoogleMap mMap;
     private ClusterManager<WifiClusterItem> mClusterManager;
-    private FusedLocationProviderClient fusedLocationClient;
-    
+    private FusedLocationProviderClient fusedLocationProviderClient;
+
     private Button startButton;
     private TextView signalInfoText;
 
     // Database components
     private AppDatabase db;
     private ExecutorService databaseExecutor;
-    
+
     private final List<Marker> markers = new ArrayList<>();
     private final List<Polyline> polylines = new ArrayList<>();
-    
+
     private String selectedSsid = null; // State: null = summary view, non-null = detailed view
 
     private final Handler mapUpdateHandler = new Handler(Looper.getMainLooper());
     private Runnable mapUpdateRunnable;
+
+    private BroadcastReceiver serviceStateReceiver;
 
     private final ActivityResultLauncher<String[]> requestPermissionLauncher =
             registerForActivityResult(new ActivityResultContracts.RequestMultiplePermissions(), result -> {
@@ -85,6 +92,16 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
                 }
             });
 
+    private final ActivityResultLauncher<String> createFileLauncher = registerForActivityResult(
+            new ActivityResultContracts.CreateDocument("application/json"),
+            this::exportDataToFile
+    );
+
+    private final ActivityResultLauncher<String[]> openFileLauncher = registerForActivityResult(
+            new ActivityResultContracts.OpenDocument(),
+            this::importDataFromFile
+    );
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -93,7 +110,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         // Initialize Database and Executor
         db = AppDatabase.getDatabase(this);
         databaseExecutor = Executors.newSingleThreadExecutor();
-        fusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
+        fusedLocationProviderClient = LocationServices.getFusedLocationProviderClient(this);
 
         // Bind UI components
         startButton = findViewById(R.id.start_button);
@@ -111,7 +128,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             mapFragment.getMapAsync(this);
         }
 
-        updateButtonState();
+        setupServiceStateReceiver();
         checkAndRequestPermissions();
     }
 
@@ -119,24 +136,40 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         Intent serviceIntent = new Intent(this, TrackingService.class);
         if (TrackingService.isRunning()) {
             stopService(serviceIntent);
-            stopMapUpdates(); // Stop refreshing when service is stopped
-            Toast.makeText(this, "Tracking stopped", Toast.LENGTH_SHORT).show();
         } else {
             ContextCompat.startForegroundService(this, serviceIntent);
-            if (mMap != null) {
-                startMapUpdates(); // Start refreshing when service starts and map is ready
-            }
-            Toast.makeText(this, "Tracking started in background", Toast.LENGTH_SHORT).show();
         }
-        updateButtonState();
     }
 
     private void updateButtonState() {
-        if (TrackingService.isRunning()) {
-            startButton.setText(R.string.stop_tracking);
+        boolean isRunning = TrackingService.isRunning();
+        startButton.setText(isRunning ? R.string.stop_tracking : R.string.start_tracking);
+
+        if (isRunning) {
+            startMapUpdates();
         } else {
-            startButton.setText(R.string.start_tracking);
+            stopMapUpdates();
         }
+    }
+
+    @Override
+    public boolean onCreateOptionsMenu(Menu menu) {
+        MenuInflater inflater = getMenuInflater();
+        inflater.inflate(R.menu.options_menu, menu);
+        return true;
+    }
+
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+        int itemId = item.getItemId();
+        if (itemId == R.id.action_import) {
+            openFileLauncher.launch(new String[]{"application/json"});
+            return true;
+        } else if (itemId == R.id.action_export) {
+            createFileLauncher.launch("wifi_signal_data.json");
+            return true;
+        }
+        return super.onOptionsItemSelected(item);
     }
 
     @Override
@@ -160,11 +193,11 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             if (refreshMarkersTask[0] != null) {
                 cameraIdleHandler.removeCallbacks(refreshMarkersTask[0]);
             }
-            refreshMarkersTask[0] = () -> refreshMarkersFromDatabase();
+            refreshMarkersTask[0] = this::refreshMarkersFromDatabase;
             cameraIdleHandler.postDelayed(refreshMarkersTask[0], 300);
         });
         mMap.setOnMarkerClickListener(mClusterManager);
-        
+
         // Reset to non-detailed view when clicking on blank part of map
         mMap.setOnMapClickListener(latLng -> {
             if (selectedSsid != null) {
@@ -172,13 +205,13 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
                 refreshMarkersFromDatabase();
             }
         });
-        
+
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
                 == PackageManager.PERMISSION_GRANTED) {
             enableMyLocationUI();
         }
         // Initial data load after the map has finished loading and bounds are available
-        mMap.setOnMapLoadedCallback(() -> refreshMarkersFromDatabase());
+        mMap.setOnMapLoadedCallback(this::refreshMarkersFromDatabase);
     }
 
     private void startMapUpdates() {
@@ -215,7 +248,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             if (selectedSsid == null) {
                 // Summary View: Load based on bounds
                 if (bounds == null) return;
-                
+
                 List<String> visibleSsids = db.signalDao().getUniqueSsidsInBounds(
                         bounds.southwest.latitude, bounds.northeast.latitude,
                         bounds.southwest.longitude, bounds.northeast.longitude);
@@ -260,11 +293,11 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
 
     private void showSummaryView(List<SignalMeasurement> allMeasurements) {
         Map<String, List<SignalMeasurement>> grouped = groupBySsid(allMeasurements);
-        
+
         for (Map.Entry<String, List<SignalMeasurement>> entry : grouped.entrySet()) {
             String ssid = entry.getKey();
-            LatLng suspectedLoc = SignalUtils.calculateWeightedCentroid(entry.getValue());
-            
+            LatLng suspectedLoc = calculateWeightedCentroid(entry.getValue());
+
             // Add to ClusterManager instead of direct map markers
             WifiClusterItem item = new WifiClusterItem(
                     suspectedLoc.latitude, suspectedLoc.longitude,
@@ -272,10 +305,11 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             );
             mClusterManager.addItem(item);
         }
-        
+
         signalInfoText.setText(String.format(Locale.getDefault(), "Viewing %d unique networks", grouped.size()));
     }
 
+    @SuppressLint("deprecation") // Using deprecated getSsid() for wider compatibility
     private void showDetailedView(List<SignalMeasurement> allMeasurements) {
         List<SignalMeasurement> relevant = new ArrayList<>();
         for (SignalMeasurement m : allMeasurements) {
@@ -288,7 +322,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             return;
         }
 
-        LatLng suspectedLoc = SignalUtils.calculateWeightedCentroid(relevant);
+        LatLng suspectedLoc = calculateWeightedCentroid(relevant);
 
         // Add supporting measurement markers
         for (SignalMeasurement m : relevant) {
@@ -298,7 +332,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
                     .snippet(m.getSsid())
                     .icon(BitmapDescriptorFactory.defaultMarker(m.getHue())));
             if (marker != null) markers.add(marker);
-            
+
             // Draw connection line
             Polyline polyline = mMap.addPolyline(new PolylineOptions()
                     .add(suspectedLoc, new LatLng(m.getLatitude(), m.getLongitude()))
@@ -323,6 +357,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         signalInfoText.setText(String.format(Locale.getDefault(), "Detail: %s (%d points)", selectedSsid, relevant.size()));
     }
 
+    @SuppressLint("deprecation") // Using deprecated getSsid() for wider compatibility
     private Map<String, List<SignalMeasurement>> groupBySsid(List<SignalMeasurement> measurements) {
         Map<String, List<SignalMeasurement>> map = new HashMap<>();
         for (SignalMeasurement m : measurements) {
@@ -375,7 +410,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             mMap.animateCamera(CameraUpdateFactory.newLatLng(cluster.getPosition()));
         });
         builder.show();
-        
+
         return true;
     }
 
@@ -391,6 +426,45 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         return false;
     }
 
+    /**
+     * Improved Weighted Centroid algorithm.
+     * To prevent a large number of weak signals from overwhelming a few strong ones, 
+     * we use a higher power for weighting and only consider measurements within 
+     * a reasonable range of the strongest detected signal.
+     */
+    private LatLng calculateWeightedCentroid(List<SignalMeasurement> measurements) {
+        if (measurements == null || measurements.isEmpty()) return new LatLng(0,0);
+
+        // 1. Find the strongest signal in the set
+        int maxRssi = -127;
+        for (SignalMeasurement m : measurements) {
+            if (m.getSignalStrength() > maxRssi) maxRssi = m.getSignalStrength();
+        }
+
+        double totalWeight = 0;
+        double weightedLat = 0;
+        double weightedLng = 0;
+
+        for (SignalMeasurement m : measurements) {
+            // 2. Ignore signals that are significantly weaker than our best signal
+            // This prevents "background noise" from distant measurements from pulling the center away.
+            if (m.getSignalStrength() < (maxRssi - SIGNAL_FILTER_THRESHOLD_DB)) continue;
+
+            // 3. Use an exponential weight to heavily favor strong signals.
+            // A -30dBm signal will have vastly more influence than a -60dBm signal.
+            double weight = Math.pow(Math.max(1, WEIGHT_OFFSET + m.getSignalStrength()), WEIGHT_EXPONENT);
+            
+            weightedLat += m.getLatitude() * weight;
+            weightedLng += m.getLongitude() * weight;
+            totalWeight += weight;
+        }
+
+        // Fallback if all were filtered
+        if (totalWeight == 0) return new LatLng(measurements.get(0).getLatitude(), measurements.get(0).getLongitude());
+
+        return new LatLng(weightedLat / totalWeight, weightedLng / totalWeight);
+    }
+
 
     private void clearMapVisuals() {
         for (Marker m : markers) m.remove();
@@ -403,7 +477,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     private void enableMyLocationUI() {
         if (mMap == null) return;
         mMap.setMyLocationEnabled(true);
-        fusedLocationClient.getLastLocation().addOnSuccessListener(this, location -> {
+        fusedLocationProviderClient.getLastLocation().addOnSuccessListener(this, location -> {
             if (location != null && selectedSsid == null) {
                 mMap.moveCamera(CameraUpdateFactory.newLatLngZoom(
                         new LatLng(location.getLatitude(), location.getLongitude()), 17));
@@ -438,19 +512,75 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         });
     }
 
+    private void setupServiceStateReceiver() {
+        serviceStateReceiver = new BroadcastReceiver() {
+            @Override
+            public void onReceive(Context context, Intent intent) {
+                updateButtonState();
+            }
+        };
+    }
+
+    private void exportDataToFile(Uri uri) {
+        if (uri == null) return;
+
+        databaseExecutor.execute(() -> {
+            List<SignalMeasurement> allData = db.signalDao().getAllMeasurements();
+            String json = JsonUtil.toJson(allData);
+
+            try (OutputStream os = getContentResolver().openOutputStream(uri)) {
+                if (os != null) {
+                    os.write(json.getBytes(StandardCharsets.UTF_8));
+                    runOnUiThread(() -> Toast.makeText(this, "Export successful", Toast.LENGTH_SHORT).show());
+                }
+            } catch (Exception e) {
+                runOnUiThread(() -> Toast.makeText(this, "Export failed", Toast.LENGTH_SHORT).show());
+            }
+        });
+    }
+
+    private void importDataFromFile(Uri uri) {
+        if (uri == null) return;
+
+        StringBuilder stringBuilder = new StringBuilder();
+        try (InputStream inputStream = getContentResolver().openInputStream(uri);
+             BufferedReader reader = new BufferedReader(new InputStreamReader(inputStream, StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                stringBuilder.append(line);
+            }
+        } catch (Exception e) {
+            Toast.makeText(this, "Import failed: Could not read file", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        String json = stringBuilder.toString();
+        List<SignalMeasurement> measurements = JsonUtil.fromJson(json);
+
+        if (measurements != null) {
+            databaseExecutor.execute(() -> {
+                db.signalDao().insertAll(measurements);
+                runOnUiThread(() -> {
+                    Toast.makeText(this, "Import successful", Toast.LENGTH_SHORT).show();
+                    refreshMarkersFromDatabase(); // Refresh map after import
+                });
+            });
+        } else {
+            Toast.makeText(this, "Import failed: Invalid data format", Toast.LENGTH_SHORT).show();
+        }
+    }
+
     @Override
     protected void onResume() {
         super.onResume();
         updateButtonState();
-        if (TrackingService.isRunning()) {
-            startMapUpdates(); // Re-start updates if the service is running
-        }
+        LocalBroadcastManager.getInstance(this).registerReceiver(serviceStateReceiver, new IntentFilter(TrackingService.ACTION_STATE_CHANGED));
     }
 
     @Override
     protected void onPause() {
         super.onPause();
-        stopMapUpdates(); // Always stop updates when the app is paused
+        LocalBroadcastManager.getInstance(this).unregisterReceiver(serviceStateReceiver);
     }
 
     @Override

@@ -8,4 +8,7 @@
     <string name="wifi_disabled">WiFi is disabled. Please enable WiFi to track signal strength.</string>
     <string name="signal_strength">Signal Strength: %d dBm</string>
     <string name="location_info">Location: %.6f, %.6f</string>
+    <string name="action_options">Options</string>
+    <string name="import_data">Import Data</string>
+    <string name="export_data">Export Data</string>
 </resources>

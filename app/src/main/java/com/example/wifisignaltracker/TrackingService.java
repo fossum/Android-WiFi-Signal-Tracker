@@ -7,10 +7,8 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
 import android.app.Service;
-import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
-import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.location.Location;
 import android.net.wifi.ScanResult;
@@ -23,8 +21,10 @@ import android.util.Log;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.core.app.NotificationCompat;
 import androidx.core.content.ContextCompat;
+import androidx.localbroadcastmanager.content.LocalBroadcastManager;
 
 import com.google.android.gms.location.FusedLocationProviderClient;
 import com.google.android.gms.location.LocationCallback;
@@ -41,38 +41,43 @@ import java.util.concurrent.Executors;
 /**
  * Foreground Service that handles location updates and WiFi scanning in the background.
  */
+@RequiresApi(api = Build.VERSION_CODES.S) // Set minimum API level for the entire service
 public class TrackingService extends Service {
 
     private static final String TAG = "TrackingService";
+    public static final String ACTION_STATE_CHANGED = "com.example.wifisignaltracker.TRACKING_STATE_CHANGED";
+    public static final String EXTRA_IS_RUNNING = "is_running";
+
     private static final String CHANNEL_ID = "TrackingServiceChannel";
     private static final int NOTIFICATION_ID = 1;
-    private static final int WIFI_SCAN_INTERVAL_MS = 10000; // 10 seconds in background
+    private static final int WIFI_SCAN_INTERVAL_MS = 10000; // 10 seconds
     private static final int MIN_SIGNAL_STRENGTH_DBM = -90;
 
-    // Track service running state (alternative to deprecated getRunningServices)
     private static volatile boolean isRunning = false;
 
     private WifiManager wifiManager;
-    private FusedLocationProviderClient fusedLocationClient;
+    private FusedLocationProviderClient fusedLocationProviderClient;
     private LocationCallback locationCallback;
     private Location currentLocation;
-    
+
     private AppDatabase db;
     private ExecutorService databaseExecutor;
-    
+
     private Handler wifiScanHandler;
     private Runnable wifiScanRunnable;
-    private BroadcastReceiver wifiScanReceiver;
+    private WifiManager.ScanResultsCallback scanResultsCallback;
 
     @Override
     public void onCreate() {
         super.onCreate();
-        
+
         isRunning = true;
+        sendStateBroadcast();
+
         db = AppDatabase.getDatabase(this);
         databaseExecutor = Executors.newSingleThreadExecutor();
         wifiManager = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
-        fusedLocationClient = LocationServices.getFusedLocationProviderClient(this);
+        fusedLocationProviderClient = LocationServices.getFusedLocationProviderClient(this);
         wifiScanHandler = new Handler(Looper.getMainLooper());
 
         setupLocationUpdates();
@@ -89,41 +94,41 @@ public class TrackingService extends Service {
     }
 
     private void setupWifiScanning() {
-        wifiScanReceiver = new BroadcastReceiver() {
+        scanResultsCallback = new WifiManager.ScanResultsCallback() {
             @Override
-            public void onReceive(Context context, Intent intent) {
+            public void onScanResultsAvailable() {
                 if (currentLocation != null) {
-                    processWifiScanResults();
+                    try {
+                        @SuppressLint("MissingPermission")
+                        List<ScanResult> results = wifiManager.getScanResults();
+                        processWifiScanResults(results);
+                    } catch (SecurityException e) {
+                        Log.e(TAG, "Permission error getting scan results", e);
+                    }
                 }
             }
         };
 
-        wifiScanRunnable = new Runnable() {
-            @SuppressWarnings("deprecation")
-            @Override
-            public void run() {
-                try {
-                    // Note: startScan() is deprecated and throttled on Android 10+ (API 29).
-                    // The OS limits apps to 4 scans per 2-minute window.
-                    // For production apps, consider using WifiManager.registerScanResultsCallback()
-                    // or implementing exponential backoff to handle throttling.
-                    wifiManager.startScan();
-                } catch (Exception e) {
-                    Log.e(TAG, "Scan failed", e);
+        wifiScanRunnable = () -> {
+            try {
+                boolean scanStarted = wifiManager.startScan();
+                if (!scanStarted) {
+                    Log.w(TAG, "Wi-Fi scan failed to start.");
                 }
-                wifiScanHandler.postDelayed(this, WIFI_SCAN_INTERVAL_MS);
+            } catch (Exception e) {
+                Log.e(TAG, "Exception during startScan()", e);
             }
+            wifiScanHandler.postDelayed(wifiScanRunnable, WIFI_SCAN_INTERVAL_MS);
         };
     }
 
     @SuppressLint("MissingPermission")
-    private void processWifiScanResults() {
-        List<ScanResult> results = wifiManager.getScanResults();
+    @SuppressWarnings("deprecation") // Using deprecated SSID and level to resolve persistent build errors.
+    private void processWifiScanResults(List<ScanResult> results) {
         List<SignalMeasurement> newMeasurements = new ArrayList<>();
-
         for (ScanResult result : results) {
             if (result.SSID == null || result.SSID.isEmpty() || result.level < MIN_SIGNAL_STRENGTH_DBM) continue;
-            
+
             SignalMeasurement m = new SignalMeasurement(
                     currentLocation.getLatitude(),
                     currentLocation.getLongitude(),
@@ -141,10 +146,9 @@ public class TrackingService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         createNotificationChannel();
-        
+
         Intent notificationIntent = new Intent(this, MainActivity.class);
-        PendingIntent pendingIntent = PendingIntent.getActivity(this,
-                0, notificationIntent, PendingIntent.FLAG_IMMUTABLE);
+        PendingIntent pendingIntent = PendingIntent.getActivity(this, 0, notificationIntent, PendingIntent.FLAG_IMMUTABLE);
 
         Notification notification = new NotificationCompat.Builder(this, CHANNEL_ID)
                 .setContentTitle("WiFi Signal Tracker")
@@ -154,30 +158,23 @@ public class TrackingService extends Service {
                 .build();
 
         startForeground(NOTIFICATION_ID, notification);
-
         startTracking();
-        
         return START_STICKY;
     }
 
     @SuppressLint("MissingPermission")
     private void startTracking() {
-        // Check location permission before starting updates
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION)
-                != PackageManager.PERMISSION_GRANTED) {
-            Log.e(TAG, "Location permission not granted, cannot start tracking");
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            Log.e(TAG, "Location permission not granted. Cannot start tracking.");
             stopSelf();
             return;
         }
-        
+
         LocationRequest locationRequest = new LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 5000)
                 .setMinUpdateIntervalMillis(2000).build();
-        
-        fusedLocationClient.requestLocationUpdates(locationRequest, locationCallback, Looper.getMainLooper());
 
-        ContextCompat.registerReceiver(this, wifiScanReceiver, 
-                new IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION), ContextCompat.RECEIVER_NOT_EXPORTED);
-        
+        fusedLocationProviderClient.requestLocationUpdates(locationRequest, locationCallback, Looper.getMainLooper());
+        wifiManager.registerScanResultsCallback(ContextCompat.getMainExecutor(this), scanResultsCallback);
         wifiScanHandler.post(wifiScanRunnable);
     }
 
@@ -185,30 +182,25 @@ public class TrackingService extends Service {
     public void onDestroy() {
         super.onDestroy();
         isRunning = false;
-        fusedLocationClient.removeLocationUpdates(locationCallback);
+        sendStateBroadcast();
+
+        fusedLocationProviderClient.removeLocationUpdates(locationCallback);
         wifiScanHandler.removeCallbacks(wifiScanRunnable);
-        
-        // Unregister receiver with proper error handling
-        if (wifiScanReceiver != null) {
-            try {
-                unregisterReceiver(wifiScanReceiver);
-            } catch (IllegalArgumentException e) {
-                // Receiver was not registered, ignore
-            }
-        }
-        
-        // Shutdown database executor
+        wifiManager.unregisterScanResultsCallback(scanResultsCallback);
+
         if (databaseExecutor != null && !databaseExecutor.isShutdown()) {
             databaseExecutor.shutdown();
         }
     }
-    
-    /**
-     * Check if the tracking service is currently running.
-     * @return true if service is running, false otherwise
-     */
+
     public static boolean isRunning() {
         return isRunning;
+    }
+
+    private void sendStateBroadcast() {
+        Intent intent = new Intent(ACTION_STATE_CHANGED);
+        intent.putExtra(EXTRA_IS_RUNNING, isRunning);
+        LocalBroadcastManager.getInstance(this).sendBroadcast(intent);
     }
 
     @Nullable
@@ -218,16 +210,14 @@ public class TrackingService extends Service {
     }
 
     private void createNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            NotificationChannel serviceChannel = new NotificationChannel(
-                    CHANNEL_ID,
-                    "Tracking Service Channel",
-                    NotificationManager.IMPORTANCE_LOW
-            );
-            NotificationManager manager = getSystemService(NotificationManager.class);
-            if (manager != null) {
-                manager.createNotificationChannel(serviceChannel);
-            }
+        NotificationChannel serviceChannel = new NotificationChannel(
+                CHANNEL_ID,
+                "Tracking Service Channel",
+                NotificationManager.IMPORTANCE_DEFAULT
+        );
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        if (manager != null) {
+            manager.createNotificationChannel(serviceChannel);
         }
     }
 }
